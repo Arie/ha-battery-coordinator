@@ -1,3 +1,7 @@
+## 0.4.2
+
+- Restored full per-tick INFO line (`P1 / PIB / Solar / Zen / target`). State transitions still get their own one-line INFO marker for grep. Sends are tagged inline on the relevant tick.
+
 ## 0.4.1
 
 - Quieter logs by default. Per-tick decisions are now `DEBUG` (~86k lines/day → 0 unless `log_level: debug`). `INFO` is reserved for state transitions, sent commands, errors, and a 60-second operational summary (`60s: state=… avg P1=… Zen=… PIBs=… sends=N`). Set `log_level: debug` to get the old per-second view back.
