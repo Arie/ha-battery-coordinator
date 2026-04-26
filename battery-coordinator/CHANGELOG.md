@@ -1,3 +1,7 @@
+## 0.4.1
+
+- Quieter logs by default. Per-tick decisions are now `DEBUG` (~86k lines/day → 0 unless `log_level: debug`). `INFO` is reserved for state transitions, sent commands, errors, and a 60-second operational summary (`60s: state=… avg P1=… Zen=… PIBs=… sends=N`). Set `log_level: debug` to get the old per-second view back.
+
 ## 0.4.0
 
 - **Breaking cleanup.** Removed 6 legacy brain implementations (PibLeaderZenFollower, ZenLeader, PibHunter, PibFull, ConsecutiveBatteries, PermissionBrain) and all their tests + simulation infrastructure. PermissionFSM is the only brain that ships now.

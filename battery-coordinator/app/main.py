@@ -59,11 +59,17 @@ async def main():
     if not config.dry_run:
         log.info("** CONTROLLING DEVICES **")
 
-    tick = 0
+    SUMMARY_INTERVAL_S = 60
+
     async with aiohttp.ClientSession() as session:
         # Read initial Zendure SN
         zen_status = await io.zendure.read(session)
         log.info(f"Zendure SN: {zen_status.sn}")
+
+        prev_state = None
+        sends_in_window = 0
+        p1_samples: list[float] = []
+        last_summary_t = time.monotonic()
 
         while True:
             t = time.monotonic()
@@ -71,6 +77,7 @@ async def main():
 
             # Read all devices
             reading, zen, p1 = await io.read_all(session)
+            p1_samples.append(reading.p1)
 
             # Brain decides
             d = brain.decide(reading, t)
@@ -82,19 +89,20 @@ async def main():
                     mode_switch = brain.last_ac_mode != PermissionFSM.AC_CHARGE
                     ok = await io.zendure.charge(session, d.target, mode_switch)
                     brain.mark_sent(d.target, t)
-                    sent = f" SENT charge {d.target}W" + (" (mode switch)" if mode_switch else "")
+                    sent = f"SENT charge {d.target}W" + (" (mode switch)" if mode_switch else "")
                 elif d.target < 0:
                     mode_switch = brain.last_ac_mode != PermissionFSM.AC_DISCHARGE
                     ok = await io.zendure.discharge(session, abs(d.target), mode_switch)
                     brain.mark_sent(d.target, t)
-                    sent = f" SENT discharge {abs(d.target)}W" + (" (mode switch)" if mode_switch else "")
+                    sent = f"SENT discharge {abs(d.target)}W" + (" (mode switch)" if mode_switch else "")
                 elif d.target == 0:
                     ok = await io.zendure.standby(session)
                     brain.mark_sent(0, t)
                     brain.last_ac_mode = None
-                    sent = " SENT standby"
-                if sent and not ok:
+                    sent = "SENT standby"
+                if not ok:
                     sent += " FAILED!"
+                sends_in_window += 1
 
             # Send PIB command
             pib_sent = ""
@@ -104,18 +112,7 @@ async def main():
                 perms = ""
                 if d.pib_permissions is not None:
                     perms = "(" + ",".join(p.replace("_allowed", "") for p in d.pib_permissions) + ")"
-                pib_sent = f" PIB→{pib_mode}{perms}" + ("" if ok else " FAILED!")
-
-            # Log
-            tgt_s = f"charge {d.target}W" if d.target > 0 else f"discharge {abs(d.target)}W" if d.target < 0 else "hold"
-            diff = d.target - zen.power
-
-            tick += 1
-            if tick == 1 or tick % 30 == 0:
-                log.info(
-                    f"{'Time':<9} {'P1':>7} {'PIB':>6} {'Solar':>5} {'Zen':>6} "
-                    f"{'Zone':<5} {'Target':<20} {'Diff':>6}"
-                )
+                pib_sent = f"PIB→{pib_mode}{perms}" + ("" if ok else " FAILED!")
 
             # Per-PIB breakdown: "+800/+240W (84/97%)"
             if reading.pibs:
@@ -125,13 +122,44 @@ async def main():
             else:
                 pib_str = f"🔌 {p1.pib_power:>+5.0f}W ({p1.pib_count}x)"
 
-            log.info(
-                f"{now}  P1:{reading.p1:>+6.0f}W  "
-                f"{pib_str}  "
-                f"☀️{reading.solar:>5.0f}W  "
-                f"🪫{zen.power:>+6.0f}W ({zen.soc:.0f}%)  "
-                f"[{d.zone:<5}] → {tgt_s} ({diff:>+.0f}){sent}{pib_sent}"
+            tgt_s = (
+                f"charge {d.target}W" if d.target > 0
+                else f"discharge {abs(d.target)}W" if d.target < 0
+                else "hold"
             )
+            diff = d.target - zen.power
+
+            # Per-tick line — DEBUG by default, INFO only with log_level=debug.
+            extras = " ".join(s for s in (sent, pib_sent) if s)
+            log.debug(
+                f"P1:{reading.p1:>+6.0f}W  {pib_str}  "
+                f"☀️{reading.solar:>5.0f}W  🪫{zen.power:>+6.0f}W ({zen.soc:.0f}%)  "
+                f"[{d.zone}] → {tgt_s} ({diff:>+.0f}) {extras}".rstrip()
+            )
+
+            # State transition → INFO once.
+            if d.zone != prev_state:
+                log.info(f"State: {prev_state or '∅'} → {d.zone}")
+                prev_state = d.zone
+
+            # Sends → INFO immediately (these are the actions that matter).
+            if sent:
+                log.info(sent)
+            if pib_sent:
+                log.info(pib_sent)
+
+            # 60-second operational summary.
+            if t - last_summary_t >= SUMMARY_INTERVAL_S:
+                avg_p1 = sum(p1_samples) / len(p1_samples) if p1_samples else 0
+                log.info(
+                    f"60s: state={d.zone} avg P1={avg_p1:+.0f}W "
+                    f"Zen={zen.power:+.0f}W ({zen.soc:.0f}%) "
+                    f"PIBs={pib_str.replace('🔌 ', '')} "
+                    f"sends={sends_in_window}"
+                )
+                p1_samples.clear()
+                sends_in_window = 0
+                last_summary_t = t
 
             await asyncio.sleep(1)
 
