@@ -16,10 +16,9 @@ The add-on talks to your devices over the LAN. You'll need three things from eac
 
 ### HomeWizard P1 meter
 
-1. Open the **HomeWizard app** → your P1 meter → **Settings** → **API**.
-2. **Enable Local API** (HTTPS). On v2 firmware (≥6.x) this requires a one-time confirmation tap on the device.
-3. **Create a token** from the same screen and copy it. Treat it like a password.
-4. **Find the IP** in the same Settings page; reserve it in DHCP.
+1. Open the **HomeWizard app** → **Settings** → **Devices** → your **P1 meter** → **Enable Local API**.
+2. On v2 firmware (≥6.x) this prompts a one-time confirmation tap on the device itself, then issues a token. Copy the token — treat it like a password.
+3. Note the IP from the same screen; reserve it in DHCP so it stays put.
 
 Reference: [HomeWizard API docs](https://api-documentation.homewizard.com/docs/v2/getting-started).
 
