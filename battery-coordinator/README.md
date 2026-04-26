@@ -7,7 +7,7 @@ Coordinates a **Zendure 2400 AC** battery alongside one or more **HomeWizard Plu
 - Picks one battery to "lead" P1 tracking at a time (no two controllers chasing zero).
 - Steps the Zendure setpoint up/down based on PIB saturation, with hysteresis to minimize relay clicks.
 - Switches to the PIBs alone when the Zendure is empty / full.
-- Uses the HomeWizard PIB **permissions API** (`charge_allowed` / `discharge_allowed`) to prevent firmware lockout.
+- Uses the HomeWizard PIB **permissions API** (`charge_allowed` / `discharge_allowed`) to keep the Zendure and PIBs from cross-charging each other when only one should be active.
 - Does NOT charge from the grid. Does NOT discharge into export.
 
 ## What you need
