@@ -59,12 +59,16 @@ async def main():
     if not config.dry_run:
         log.info("** CONTROLLING DEVICES **")
 
+    HEARTBEAT_S = 60  # log a status line at INFO at least this often
+
     async with aiohttp.ClientSession() as session:
         # Read initial Zendure SN
         zen_status = await io.zendure.read(session)
         log.info(f"Zendure SN: {zen_status.sn}")
 
         prev_state = None
+        prev_target: int | None = None
+        last_info_t = 0.0
 
         while True:
             t = time.monotonic()
@@ -123,16 +127,28 @@ async def main():
             diff = d.target - zen.power
 
             # State transition → its own INFO line for easy grep.
-            if d.zone != prev_state:
+            state_changed = d.zone != prev_state
+            if state_changed:
                 log.info(f"State: {prev_state or '∅'} → {d.zone}")
                 prev_state = d.zone
 
-            # Per-tick decision line.
-            log.info(
+            # Promote the per-tick line to INFO only when something interesting
+            # actually happened — a send, a state change, a target shift, or
+            # the 60s heartbeat. Quiet ticks stay at DEBUG.
+            target_changed = prev_target is None or abs(d.target - prev_target) >= 50
+            heartbeat_due = (t - last_info_t) >= HEARTBEAT_S
+            interesting = bool(sent or pib_sent or state_changed or target_changed or heartbeat_due)
+            line = (
                 f"{now}  P1:{reading.p1:>+6.0f}W  {pib_str}  "
                 f"☀️{reading.solar:>5.0f}W  🪫{zen.power:>+6.0f}W ({zen.soc:.0f}%)  "
                 f"[{d.zone}] → {tgt_s} ({diff:>+.0f}){sent}{pib_sent}"
             )
+            if interesting:
+                log.info(line)
+                last_info_t = t
+            else:
+                log.debug(line)
+            prev_target = d.target
 
             await asyncio.sleep(1)
 

@@ -1,3 +1,7 @@
+## 0.5.1
+
+- Throttled the per-tick INFO line. It now logs at INFO only when something interesting happens — a send, a state transition, a target shift of ≥50W, or a 60s heartbeat. Quiet ticks (same target, no events) drop to DEBUG. Result: a calm minute = ~1 INFO line; an active minute = the full picture.
+
 ## 0.5.0
 
 - Per-tick Zendure charge/discharge writes now include `smartMode: 1` (RAM-only) so the rapid NOM tracking doesn't wear out the inverter's flash. Standby still uses `smartMode: 0` (persist to Flash) so the device can deep-sleep without re-writes. Net: thousands of flash writes per day → a handful at sleep/wake transitions.
