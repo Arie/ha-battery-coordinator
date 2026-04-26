@@ -108,7 +108,6 @@ battery-coordinator/      The HA add-on (config.yaml, Dockerfile, app/)
     brains/permission_fsm.py   The FSM brain
 coordinator_cli.py        Legacy systemd CLI (HA REST, kept for handover scenarios)
 tests/                    260+ unit + property-based + invariant tests
-docs/                     Background notes
 ```
 
 ## Development
