@@ -1,0 +1,80 @@
+configuration:
+  zendure_ip:
+    name: Zendure IP
+    description: Local IP of the Zendure 2400 AC. HEMS must be disabled for the local API to respond.
+  hw_p1_ip:
+    name: HomeWizard P1 IP
+    description: Local IP of the HomeWizard P1 meter.
+  hw_p1_token:
+    name: HomeWizard P1 token
+    description: API token from the HomeWizard app → Settings → Local API.
+  solar_entity:
+    name: Solar power entity (optional)
+    description: A Home Assistant sensor reporting current solar production in W. Leave empty to skip — the brain still works without solar input.
+
+  pib_soc_entities:
+    name: PIB state-of-charge entities
+    description: HA sensor entity IDs reporting each PIB's SOC (%). The HomeWizard P1 API doesn't expose SOC, so this must come from HA. Defaults to the names HA's HomeWizard integration creates. Up to 4 supported; SOCs are averaged before reaching the brain.
+  pib_power_entities:
+    name: PIB power entities
+    description: HA sensor entity IDs reporting each PIB's power (W). Used to give the brain per-PIB power instead of the combined value from /api/batteries. Up to 4 supported.
+
+  zen_max_charge_w:
+    name: Zendure max charge (W)
+    description: Maximum charge power the Zendure inverter can absorb. Default 2400 for the 2400 AC.
+  zen_max_discharge_w:
+    name: Zendure max discharge (W)
+    description: Maximum discharge power the Zendure inverter can deliver. Default 2400 for the 2400 AC.
+  zen_soc_min:
+    name: Zendure SOC min (%)
+    description: Below this SOC the brain stops discharging the Zendure.
+  zen_soc_max:
+    name: Zendure SOC max (%)
+    description: Above this SOC the brain stops charging the Zendure.
+
+  brain_step_holdoff_s:
+    name: Step holdoff (s)
+    description: Seconds the PIBs must stay saturated before stepping the Zendure setpoint up/down.
+  brain_flip_s:
+    name: Charge↔discharge flip holdoff (s)
+    description: Seconds of sustained signal required before flipping direction. Higher = fewer relay clicks, slower response.
+  brain_wake_charge_s:
+    name: Wake to CHARGE (s)
+    description: Seconds of sustained export before SLEEP → CHARGE.
+  brain_wake_discharge_s:
+    name: Wake to DISCHARGE (s)
+    description: Seconds of sustained import before SLEEP → DISCHARGE.
+  brain_help_enter_s:
+    name: PIB help enter (s)
+    description: Seconds of Zendure-maxed before waking PIBs to help discharge.
+  brain_help_exit_s:
+    name: PIB help exit (s)
+    description: Seconds of low load before standbying the PIBs again.
+  brain_pib_high_w:
+    name: PIB high threshold (W)
+    description: Combined PIB power above this triggers a Zendure step-up.
+  brain_pib_maxed_w:
+    name: PIB maxed threshold (W)
+    description: Combined PIB power above this triggers a fast step-up (PIBs near hardware max).
+  brain_pib_low_w:
+    name: PIB low threshold (W)
+    description: Combined PIB power below this triggers a Zendure step-down.
+  brain_pib_taper_cap_w:
+    name: PIB taper cap (W)
+    description: Per-PIB charge cap below which we treat the PIB as in taper zone (high SOC).
+  brain_nom_deadband_w:
+    name: NOM deadband (W)
+    description: Minimum target change required to send a new Zendure setpoint while NOM-tracking.
+  brain_p1_export_w:
+    name: P1 export threshold (W)
+    description: P1 below this (negative) is treated as exporting surplus. Default -100W.
+  brain_p1_import_w:
+    name: P1 import threshold (W)
+    description: P1 above this is treated as importing deficit. Default 200W.
+
+  log_level:
+    name: Log level
+    description: debug for verbose, info for normal operation.
+  dry_run:
+    name: Dry run
+    description: When enabled, the brain runs and logs decisions but never sends commands to devices.

@@ -1,0 +1,34 @@
+[project]
+name = "ha-addon-battery-coordinator"
+version = "0.1.0"
+description = "Coordinates Zendure battery with HomeWizard Plug-in Batteries for Home Assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "matplotlib>=3.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["battery-coordinator/app", "tests"]
+norecursedirs = ["tests/legacy"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# E402: imports after sys.path manipulation (required for app module path)
+per-file-ignores = {"coordinator_cli.py" = ["E402"], "tests/*.py" = ["E402"], "tests/play_day.py" = ["E701", "F841"], "tests/simulator.py" = ["F841"]}
+
+[dependency-groups]
+dev = [
+    "pyyaml>=6.0.3",
+    "ruff>=0.15.9",
+]

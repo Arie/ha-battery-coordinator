@@ -1,0 +1,95 @@
+name: Battery Coordinator
+version: "0.4.0"
+slug: battery-coordinator
+description: Coordinates a Zendure 2400 AC battery with HomeWizard Plug-in Batteries against a HomeWizard P1 meter — prevents oscillation, cross-charging, and grid bleed.
+url: "https://github.com/Arie/ha-battery-coordinator"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+startup: application
+boot: auto
+init: false
+host_network: true
+homeassistant_api: true
+
+options:
+  # ─── Required: device addresses ───
+  zendure_ip: ""
+  hw_p1_ip: ""
+  hw_p1_token: ""
+
+  # ─── Optional: solar sensor via Home Assistant ───
+  # Leave empty to skip. Without solar, the brain still works — it just
+  # can't auto-flip discharge→charge at sunrise.
+  solar_entity: ""
+
+  # ─── PIB SOC + power via HA (defaults match the HomeWizard integration) ───
+  # The HW P1 /api/batteries endpoint only gives combined power and no SOC,
+  # so the per-PIB values must come from HA. Up to 4 batteries supported.
+  pib_soc_entities:
+    - sensor.plug_in_battery_state_of_charge
+    - sensor.plug_in_battery_state_of_charge_2
+  pib_power_entities:
+    - sensor.plug_in_battery_power
+    - sensor.plug_in_battery_power_2
+
+  # ─── Hardware limits ───
+  zen_max_charge_w: 2400
+  zen_max_discharge_w: 2400
+  zen_soc_min: 10
+  zen_soc_max: 100
+
+  # ─── Brain tuning (advanced — defaults are production-tested) ───
+  brain_step_holdoff_s: 15
+  brain_flip_s: 30
+  brain_wake_charge_s: 10
+  brain_wake_discharge_s: 30
+  brain_help_enter_s: 15
+  brain_help_exit_s: 15
+  brain_pib_high_w: 1200
+  brain_pib_maxed_w: 1400
+  brain_pib_low_w: 200
+  brain_pib_taper_cap_w: 600
+  brain_nom_deadband_w: 10
+  brain_p1_export_w: -100
+  brain_p1_import_w: 200
+
+  # ─── Operations ───
+  log_level: info
+  dry_run: false
+
+schema:
+  zendure_ip: str
+  hw_p1_ip: str
+  hw_p1_token: password
+
+  solar_entity: "str?"
+
+  pib_soc_entities:
+    - "match(^.+\\..+$)"
+  pib_power_entities:
+    - "match(^.+\\..+$)"
+
+  zen_max_charge_w: "int(100,4800)"
+  zen_max_discharge_w: "int(100,4800)"
+  zen_soc_min: "int(0,50)"
+  zen_soc_max: "int(50,100)"
+
+  brain_step_holdoff_s: "int(1,120)"
+  brain_flip_s: "int(5,300)"
+  brain_wake_charge_s: "int(1,120)"
+  brain_wake_discharge_s: "int(1,300)"
+  brain_help_enter_s: "int(1,120)"
+  brain_help_exit_s: "int(1,120)"
+  brain_pib_high_w: "int(100,2000)"
+  brain_pib_maxed_w: "int(500,2400)"
+  brain_pib_low_w: "int(0,500)"
+  brain_pib_taper_cap_w: "int(100,1000)"
+  brain_nom_deadband_w: "int(1,100)"
+  brain_p1_export_w: "int(-1000,0)"
+  brain_p1_import_w: "int(0,1000)"
+
+  log_level: "list(debug|info|warning|error)"
+  dry_run: bool

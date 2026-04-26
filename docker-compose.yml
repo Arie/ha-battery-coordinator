@@ -1,0 +1,6 @@
+services:
+  battery-coordinator:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    network_mode: host  # needs direct access to local devices

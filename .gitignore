@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+uv.lock
+
+# Test artifacts
+tests/plots/*
+tests/data/day_analysis.json
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+history.csv
+.env
