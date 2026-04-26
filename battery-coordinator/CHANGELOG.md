@@ -1,3 +1,7 @@
+## 0.5.0
+
+- Per-tick Zendure charge/discharge writes now include `smartMode: 1` (RAM-only) so the rapid NOM tracking doesn't wear out the inverter's flash. Standby still uses `smartMode: 0` (persist to Flash) so the device can deep-sleep without re-writes. Net: thousands of flash writes per day → a handful at sleep/wake transitions.
+
 ## 0.4.2
 
 - Restored full per-tick INFO line (`P1 / PIB / Solar / Zen / target`). State transitions still get their own one-line INFO marker for grep. Sends are tagged inline on the relevant tick.

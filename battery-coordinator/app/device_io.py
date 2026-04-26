@@ -89,21 +89,27 @@ class ZendureDevice:
         )
 
     async def charge(self, session: aiohttp.ClientSession, watts: int, mode_switch: bool = False) -> bool:
-        """Set charge power. mode_switch=True flips relay to charge mode."""
-        props = {"inputLimit": watts}
+        """Set charge power. mode_switch=True flips relay to charge mode.
+
+        Sends `smartMode: 1` (RAM-only writes) so the rapid NOM updates
+        the brain emits don't accumulate flash wear on the inverter.
+        Standby will switch back to Flash so the device can deep-sleep.
+        """
+        props = {"inputLimit": watts, "smartMode": 1}
         if mode_switch:
             props["acMode"] = 1
         return await self._write(session, props)
 
     async def discharge(self, session: aiohttp.ClientSession, watts: int, mode_switch: bool = False) -> bool:
         """Set discharge power. mode_switch=True flips relay to discharge mode."""
-        props = {"outputLimit": watts}
+        props = {"outputLimit": watts, "smartMode": 1}
         if mode_switch:
             props["acMode"] = 2
         return await self._write(session, props)
 
     async def standby(self, session: aiohttp.ClientSession) -> bool:
-        """Deep standby — inverter off."""
+        """Deep standby — inverter off, persist to flash so it stays off
+        across reboots and the device can drop into low-power mode."""
         return await self._write(session, {"smartMode": 0, "outputLimit": 0, "inputLimit": 0})
 
     async def _write(self, session: aiohttp.ClientSession, properties: dict) -> bool:
