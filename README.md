@@ -61,13 +61,37 @@ docker compose up -d
 
 The container talks directly to the Zendure (local REST) and HomeWizard P1 (local HTTPS) — no Home Assistant required. Optional HA REST API for a solar sensor only.
 
-## What it does
+## How it coordinates the batteries
 
-- **One controller on the meter at a time.** Picks Zendure or PIBs to track P1, never both.
-- **Stepped Zendure setpoints** in CHARGE mode (0 / 200 / 400 / 800 / 1200 / 1600 / 2000 / 2400 W) with hysteresis to minimize relay clicks.
-- **NOM mode** when PIBs hit taper or saturation — Zendure absorbs the residual.
-- **PIB permissions API** (`charge_allowed` / `discharge_allowed`) to keep the Zendure and PIBs from cross-charging each other when only one should be active.
-- **Never charges from grid.** Never discharges into export.
+The PIBs and the Zendure both want to balance the grid meter to zero ("NOM" — net-on-meter). If both react at the same time they fight: the Zendure overshoots, the PIBs correct, the Zendure backs off, repeat. The brain solves this by giving exactly one device the role of "fast P1 tracker" at any moment, and using the other as a slower predictable bias.
+
+### Charging from solar surplus
+
+The Zendure runs at one of a few **fixed power steps**: `0 / 200 / 400 / 800 / 1200 / 1600 / 2000 / 2400 W`. While it sits on a step it acts as a constant load — quiet, predictable. The PIBs do the actual NOM tracking against P1 on top of that baseline. The HW PIBs are the right unit for this job: they react in milliseconds, rarely click their relays, and don't mind hunting around zero.
+
+The brain watches how hard the PIBs are working and shifts the Zendure step accordingly:
+
+- **PIBs near their hardware max** (combined > ~1200W, or saturating relative to their current charge cap when one is in taper) → step the Zendure **up** so the PIBs have headroom again.
+- **PIBs nearly idle** (combined < ~200W) → step the Zendure **down** so the PIBs aren't getting starved by an oversized Zendure setpoint.
+
+Step changes have hysteresis (~15s sustained signal) so a passing cloud or appliance cycle doesn't trigger relay clicks.
+
+### When the PIBs run out of room
+
+PIBs lose charge capacity above ~93% SOC ("taper zone": 720 W → 600 → 480 → 240 → 180 → 120 W as SOC climbs to 100%). At that point the stepped scheme stops working — the PIBs can't absorb whatever the Zendure isn't taking. The brain detects this and **switches the Zendure into its own NOM mode**, where it tracks P1 directly: `Zen target = current_zen_power − P1`. The PIBs hold zero. The Zendure is now the fast tracker until either solar drops or the PIBs come out of taper.
+
+### Discharging at night
+
+Mirror image. The Zendure is the fast NOM tracker; PIBs sit in standby. When the Zendure hits its max discharge AND P1 is still importing, the brain wakes the PIBs to **help discharge** (Zen pinned at max, PIBs absorb the residual). When the Zendure runs empty, PIBs take over solo.
+
+### Cross-charge prevention
+
+The HW PIB **permissions API** (`charge_allowed` / `discharge_allowed`) is the lock: when the Zendure is leading discharge, PIBs are set `discharge_allowed` only — they physically cannot charge from the Zendure even if the firmware would otherwise want to.
+
+### Hard rules
+
+- **Never charge from the grid.** If P1 is importing and there's no solar, the Zendure goes to standby instead of sucking power off the meter.
+- **Never discharge into export.** If solar produces more than the house consumes, the Zendure stops discharging immediately.
 
 ## Repository layout
 
