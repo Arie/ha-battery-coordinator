@@ -17,32 +17,34 @@ The add-on talks to your devices over the LAN. You'll need three things from eac
 ### HomeWizard P1 meter
 
 1. Open the **HomeWizard app** → **Settings** → **Devices** → your **P1 meter** → **Enable Local API**.
-2. On v2 firmware (≥6.x) this prompts a one-time confirmation tap on the device itself, then issues a token. Copy the token — treat it like a password.
+2. On v2 firmware (≥6.x) the app will prompt you to **press the button on the P1 meter** within 30 seconds. After the press the app issues a bearer token — copy it and treat it like a password.
 3. Note the IP from the same screen; reserve it in DHCP so it stays put.
 
-Reference: [HomeWizard API docs](https://api-documentation.homewizard.com/docs/v2/getting-started).
+Reference: [HomeWizard API docs](https://api-documentation.homewizard.com/docs/v2/authorization).
 
 ### HomeWizard PIB SOC entities (Home Assistant)
 
-The HW P1 `/api/batteries` endpoint doesn't expose per-PIB state of charge — that data only flows through HA's HomeWizard integration. **Add the integration first** (Settings → Devices & Services → Add Integration → HomeWizard → enter the P1 IP). The default entity names the integration creates are:
+The HW P1 `/api/batteries` endpoint doesn't expose per-PIB state of charge — that data only flows through HA's [HomeWizard integration](https://www.home-assistant.io/integrations/homewizard/). **Add the integration first** (Settings → Devices & services → Add Integration → HomeWizard). The integration auto-discovers HW devices on your LAN; if discovery doesn't find them you can enter the P1's IP manually.
+
+For each PIB the integration creates a `Plug-In Battery` device with sensors. With default device names you'll get:
 
 - `sensor.plug_in_battery_state_of_charge` (PIB 1)
 - `sensor.plug_in_battery_state_of_charge_2` (PIB 2)
-- ... up to `_4`
+- ... and so on for `_3`, `_4`
 
-If your entity IDs differ (renamed devices, multiple P1 meters), update them in the add-on's Configuration tab.
+If you renamed a PIB device, the entity ID will reflect the new name. Check **Settings → Devices & services → HomeWizard** to confirm the actual IDs and put them in the add-on's Configuration tab.
 
 ## Install as a Home Assistant Add-on
 
 If you run **HA OS** or **HA Supervised**:
 
-1. Settings → Add-ons → Add-on Store → ⋮ → **Repositories**
-2. Add `https://github.com/Arie/ha-battery-coordinator`
-3. Install **Battery Coordinator** from the new section
+1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories** (older HA UIs) or **Settings → Apps → App Store → ⋮ → Repositories** (newer UIs after the rename).
+2. Add `https://github.com/Arie/ha-battery-coordinator` and close the dialog.
+3. Refresh the store, find **Battery Coordinator**, and **Install**.
 4. Configuration tab — fill in the values you collected above:
    - `zendure_ip` — from Zendure app → Device Information
-   - `hw_p1_ip` — from HomeWizard app → Settings → API
-   - `hw_p1_token` — from HomeWizard app → Settings → API
+   - `hw_p1_ip` — from HomeWizard app → Settings → Devices → P1 meter
+   - `hw_p1_token` — the token issued after the button-press step
    - `solar_entity` (optional) — your HA solar power sensor, used only as a sunrise sanity guard
    - `pib_soc_entities` / `pib_power_entities` — defaults match HA's HomeWizard integration; edit only if your entity IDs differ
 5. **Start** the add-on and watch the **Log** tab. The first useful line is `Zendure SN: ...` followed by per-second decisions (`P1 / PIB / Solar / Zen / Zone / Target`).
