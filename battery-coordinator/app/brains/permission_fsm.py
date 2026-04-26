@@ -210,7 +210,7 @@ class PermissionFSM:
             State.DISCHARGE: [
                 # Solar returns → charge
                 (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.p1 < self.P1_EXPORT and r.solar > 50),
+                 lambda r, _: r.p1 < self.P1_EXPORT),
                 # Zendure empty, PIBs can help → PIB_DISCHARGE
                 (Transition(State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]),
                  lambda r, _: r.zen_soc <= self.zen_soc_min and any(s > 1 for s in r.pib_socs)),
@@ -224,7 +224,7 @@ class PermissionFSM:
             State.DISCHARGE_HELP: [
                 # Solar returns → charge
                 (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.p1 < self.P1_EXPORT and r.solar > 50),
+                 lambda r, _: r.p1 < self.P1_EXPORT),
                 # Zendure can handle alone → back to solo
                 # P1 negative = over-discharging, load dropped → back to NOM solo
                 (Transition(State.DISCHARGE, holdoff_s=0, pib_mode="standby"),
@@ -238,7 +238,7 @@ class PermissionFSM:
             State.PIB_DISCHARGE: [
                 # Solar returns → charge
                 (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.p1 < self.P1_EXPORT and r.solar > 50),
+                 lambda r, _: r.p1 < self.P1_EXPORT),
                 # PIBs empty → sleep. Set charge-only so they auto-capture
                 # the first watt of solar surplus without waiting for CHARGE wake.
                 (Transition(State.SLEEP, holdoff_s=0, pib_mode="zero", pib_permissions=["charge_allowed"]),

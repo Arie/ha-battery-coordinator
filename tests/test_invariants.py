@@ -235,6 +235,44 @@ class TestDoesNotKillWorkingZendure:
         )
 
 
+class TestSunriseFlipWithoutSolarSensor:
+    """DISCHARGE → CHARGE must work when no solar sensor is configured.
+
+    Older versions required `solar > 50` in addition to P1 export — without
+    a solar entity that always read 0 and the flip never fired, leaving
+    the brain dribbling its discharge floor (~50W) into export until SOC
+    hit the minimum. Now P1 export alone is the signal."""
+
+    def test_discharge_to_charge_flips_with_zero_solar(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE")
+        # Sustained P1 export, but solar entity reads 0 (not configured).
+        for tick in range(int(PermissionFSM.FLIP_S) + 5):
+            brain.decide(
+                _steady_reading(p1=-500, solar=0,
+                                zen_power=-500, zen_soc=70,
+                                pib1=0, pib2=0, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+        assert brain.state.value == "CHARGE", (
+            "Brain stayed in DISCHARGE despite sustained -500W export — "
+            "sunrise flip should not require a solar entity."
+        )
+
+    def test_pib_discharge_to_charge_flips_with_zero_solar(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("PIB_DISCHARGE")
+        for tick in range(int(PermissionFSM.FLIP_S) + 5):
+            brain.decide(
+                _steady_reading(p1=-500, solar=0,
+                                zen_power=0, zen_soc=10,
+                                pib1=-200, pib2=-200,
+                                pib1_soc=40, pib2_soc=40),
+                t=tick,
+            )
+        assert brain.state.value == "CHARGE"
+
+
 class TestPIBDischargeExitsWhenEmpty:
     """PIB_DISCHARGE should transition to SLEEP when PIBs are truly empty."""
 

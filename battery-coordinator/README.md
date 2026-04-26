@@ -17,7 +17,7 @@ The full coordination strategy is documented in the [project README](https://git
 - A **Zendure 2400 AC** with HEMS disabled (so its local REST API is reachable). Find its IP in the Zendure app under *Device Information*.
 - A **HomeWizard P1 meter** with a local API token. Enable via HW app → *Settings → Devices → P1 meter → Enable Local API*; press the button on the meter when prompted to issue the token.
 - HA's [HomeWizard integration](https://www.home-assistant.io/integrations/homewizard/) installed — that's where per-PIB SOC and power come from (the P1's `/api/batteries` endpoint exposes neither).
-- Optional: a **solar power** sensor entity in HA (used only as a sanity guard during the discharge↔charge flip at sunrise).
+- Optional: a **solar power** sensor entity in HA — purely informational, shown in logs for diagnostics. The brain doesn't depend on it.
 
 ## Configuration
 

@@ -12,6 +12,7 @@ The add-on talks to your devices over the LAN. You'll need three things from eac
 
 1. **Disable HEMS** in the Zendure app. The local REST API only responds when HEMS is off — leaving HEMS on means the cloud-side controller stays in charge and the add-on can't reach it. (See the [Zendure-HA-zenSDK README](https://github.com/Gielz1986/Zendure-HA-zenSDK) for screenshots.)
 2. **Find the device IP.** Zendure app → your device → **Device Information** → IP address. Pin it to a DHCP reservation in your router so it doesn't move.
+
 3. **Confirm it's reachable.** From any host on the same LAN: `curl http://<zendure_ip>/properties/report` should return JSON with a `sn` field. If it 404s or hangs, HEMS is still on or the firmware is too old.
 
 ### HomeWizard P1 meter
@@ -45,7 +46,7 @@ If you run **HA OS** or **HA Supervised**:
    - `zendure_ip` — from Zendure app → Device Information
    - `hw_p1_ip` — from HomeWizard app → Settings → Devices → P1 meter
    - `hw_p1_token` — the token issued after the button-press step
-   - `solar_entity` (optional) — your HA solar power sensor, used only as a sunrise sanity guard
+   - `solar_entity` (optional) — your HA solar power sensor. Purely informational; logged for diagnostics. Safe to leave empty.
    - `pib_soc_entities` / `pib_power_entities` — defaults match HA's HomeWizard integration; edit only if your entity IDs differ
 5. **Start** the add-on and watch the **Log** tab. The first useful line is `Zendure SN: ...` followed by per-second decisions (`P1 / PIB / Solar / Zen / Zone / Target`).
 
@@ -91,8 +92,10 @@ The HW PIB **permissions API** (`charge_allowed` / `discharge_allowed`) is the l
 
 ### Hard rules
 
-- **Never charge from the grid.** If P1 is importing and there's no solar, the Zendure goes to standby instead of sucking power off the meter.
-- **Never discharge into export.** If solar produces more than the house consumes, the Zendure stops discharging immediately.
+- **Never charge from the grid.** Wake-to-charge requires sustained P1 export — if P1 is importing the brain stays out of CHARGE.
+- **Never discharge into export.** When P1 swings to export the brain flips out of DISCHARGE within `FLIP_S` (default 30s) and stops draining the battery into the meter.
+
+Both rules hold whether or not a solar sensor is configured — the brain uses P1 as the sole source of truth.
 
 ## Repository layout
 
