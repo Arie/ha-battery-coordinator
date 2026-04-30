@@ -273,6 +273,258 @@ class TestSunriseFlipWithoutSolarSensor:
         assert brain.state.value == "CHARGE"
 
 
+class TestStandbyAtSaturation:
+    """When everything is saturated and P1 is idle, brain should put PIBs
+    in standby instead of leaving them awake in zero-mode burning idle.
+    Symmetric: full + no demand, and empty + no surplus."""
+
+    def test_charge_to_sleep_at_relaxed_full_with_idle_p1(self):
+        """Near-full (99/99/99 — taper noise, not literal 100/100) + P1
+        idle → SLEEP after FLIP_S."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+
+        for tick in range(int(PermissionFSM.FLIP_S) + 5):
+            brain.decide(
+                _steady_reading(p1=0, solar=0, zen_power=0, zen_soc=99,
+                                pib1=0, pib2=0, pib1_soc=99, pib2_soc=99),
+                t=tick,
+            )
+
+        assert brain.state.value == "SLEEP", (
+            f"Expected SLEEP but got {brain.state.value}. Near-full + idle "
+            "P1 should let PIBs standby."
+        )
+
+    def test_full_sleep_wakes_to_discharge_on_demand(self):
+        """After SLEEPing at full saturation, P1 import wakes to DISCHARGE."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+
+        for tick in range(int(PermissionFSM.FLIP_S) + 5):
+            brain.decide(
+                _steady_reading(p1=0, zen_soc=100, pib1_soc=100, pib2_soc=100),
+                t=tick,
+            )
+        assert brain.state.value == "SLEEP"
+
+        base = int(PermissionFSM.FLIP_S) + 5
+        for tick in range(int(PermissionFSM.WAKE_DISCHARGE_S) + 5):
+            brain.decide(
+                _steady_reading(p1=500, zen_soc=100, pib1_soc=100, pib2_soc=100),
+                t=base + tick,
+            )
+        assert brain.state.value == "DISCHARGE", (
+            f"Expected DISCHARGE but got {brain.state.value}. SLEEP-from-full "
+            "should still wake on P1 demand."
+        )
+
+    def test_drain_sleep_wakes_to_charge_on_surplus(self):
+        """After draining to SLEEP via PIB_DISCHARGE, surplus still wakes."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("PIB_DISCHARGE")
+
+        brain.decide(
+            _steady_reading(p1=0, zen_soc=10, pib1=0, pib2=0,
+                            pib1_soc=0, pib2_soc=0),
+            t=0,
+        )
+        assert brain.state.value == "SLEEP"
+
+        for tick in range(int(PermissionFSM.WAKE_CHARGE_S) + 5):
+            brain.decide(
+                _steady_reading(p1=-500, solar=2000, zen_soc=10,
+                                pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+                t=tick + 1,
+            )
+        assert brain.state.value == "CHARGE", (
+            f"Expected CHARGE but got {brain.state.value}. Drained SLEEP "
+            "must still wake on solar surplus."
+        )
+
+
+class TestSleepEntryUsesStandby:
+    """All paths into SLEEP should park PIBs in standby (not the old
+    'zero+charge_allowed' fast-capture mode). The fast-capture saved a
+    handful of seconds at sunrise but cost continuous PIB idle."""
+
+    def test_pib_discharge_to_sleep_uses_standby(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("PIB_DISCHARGE")
+
+        d = brain.decide(
+            _steady_reading(p1=0, zen_power=0, zen_soc=10,
+                            pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+            t=0,
+        )
+
+        assert brain.state.value == "SLEEP"
+        assert d.pib_mode == "standby", (
+            f"Expected pib_mode='standby' on PIB_DISCHARGE→SLEEP, got "
+            f"{d.pib_mode!r}."
+        )
+
+    def test_discharge_to_sleep_uses_standby(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE")
+
+        d = brain.decide(
+            _steady_reading(p1=0, zen_power=0, zen_soc=10,
+                            pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+            t=0,
+        )
+
+        assert brain.state.value == "SLEEP"
+        assert d.pib_mode == "standby", (
+            f"Expected pib_mode='standby' on DISCHARGE→SLEEP, got "
+            f"{d.pib_mode!r}."
+        )
+
+
+class TestPIBModeHeartbeat:
+    """Brain re-asserts the desired PIB mode periodically so silent drift
+    (failed PUT, external app toggle, integration refresh) self-heals."""
+
+    def test_heartbeats_after_transition(self):
+        brain = PermissionFSM()
+
+        # Wake to DISCHARGE — captures the transition tick when pib_mode=standby fires.
+        transition_t = None
+        for tick in range(int(PermissionFSM.WAKE_DISCHARGE_S) + 5):
+            d = brain.decide(
+                _steady_reading(p1=500, zen_soc=80, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+            if d.pib_mode == "standby":
+                transition_t = tick
+        assert brain.state.value == "DISCHARGE"
+        assert transition_t is not None, "Transition should have set pib_mode=standby"
+
+        # Between transition and heartbeat: no spurious sends.
+        sends_before_heartbeat = 0
+        for tick in range(transition_t + 1,
+                          transition_t + int(PermissionFSM.PIB_HEARTBEAT_S) - 1):
+            d = brain.decide(
+                _steady_reading(p1=500, zen_power=-500, zen_soc=70,
+                                pib1_soc=70, pib2_soc=70),
+                t=tick,
+            )
+            if d.pib_mode is not None:
+                sends_before_heartbeat += 1
+        assert sends_before_heartbeat == 0, (
+            f"Sent pib_mode {sends_before_heartbeat} times before heartbeat — "
+            "should be silent until PIB_HEARTBEAT_S elapses."
+        )
+
+        # Past heartbeat: re-asserts.
+        d = brain.decide(
+            _steady_reading(p1=500, zen_power=-500, zen_soc=70,
+                            pib1_soc=70, pib2_soc=70),
+            t=transition_t + int(PermissionFSM.PIB_HEARTBEAT_S) + 1,
+        )
+        assert d.pib_mode == "standby", (
+            f"Heartbeat should re-assert pib_mode=standby, got {d.pib_mode!r}"
+        )
+
+    def test_no_spurious_send_at_startup(self):
+        """Fresh brain in SLEEP with no transition fired → no pib_mode at all."""
+        brain = PermissionFSM()
+        for tick in range(int(PermissionFSM.PIB_HEARTBEAT_S) + 10):
+            d = brain.decide(
+                _steady_reading(p1=0, zen_soc=50, pib1_soc=50, pib2_soc=50),
+                t=tick,
+            )
+            assert d.pib_mode is None, (
+                f"Spurious pib_mode={d.pib_mode!r} at tick {tick} — brain "
+                "has not transitioned, so it has no opinion to assert."
+            )
+
+
+class TestZenStandbyHeartbeat:
+    """Zen target=0 (flash-standby) should also be re-asserted periodically,
+    not just sent once on entry."""
+
+    def test_heartbeats_in_pib_discharge(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("PIB_DISCHARGE")
+        # Pretend we were discharging at -800W just before draining.
+        brain.last_sent_target = -800
+        brain.last_send_time = 0
+
+        # Past the 5s ramp-protection guard, brain sends target=0 once.
+        d = brain.decide(
+            _steady_reading(p1=500, zen_power=0, zen_soc=10,
+                            pib1=-200, pib2=-200,
+                            pib1_soc=40, pib2_soc=40),
+            t=10,
+        )
+        assert d.target == 0
+        assert d.send is True, "First standby send after PIB_DISCHARGE entry"
+        brain.mark_sent(d.target, t=10)
+
+        # Between first send and heartbeat: silent.
+        for tick in range(11, 39):
+            d = brain.decide(
+                _steady_reading(p1=500, zen_power=0, zen_soc=10,
+                                pib1=-200, pib2=-200,
+                                pib1_soc=40, pib2_soc=40),
+                t=tick,
+            )
+            assert d.send is False, (
+                f"Spurious send at t={tick} (only {tick-10}s elapsed since standby)"
+            )
+
+        # Past 30s: heartbeat re-asserts.
+        d = brain.decide(
+            _steady_reading(p1=500, zen_power=0, zen_soc=10,
+                            pib1=-200, pib2=-200,
+                            pib1_soc=40, pib2_soc=40),
+            t=42,
+        )
+        assert d.target == 0 and d.send is True, (
+            f"Heartbeat should re-assert standby at 30s+, got target={d.target} send={d.send}"
+        )
+
+    def test_no_spurious_send_at_startup(self):
+        """Fresh brain in SLEEP, no last_sent_target → no spurious standbys."""
+        brain = PermissionFSM()
+        for tick in range(60):
+            d = brain.decide(
+                _steady_reading(p1=0, zen_soc=50, pib1_soc=50, pib2_soc=50),
+                t=tick,
+            )
+            assert d.send is False, (
+                f"Spurious send at t={tick} — brain has nothing to assert "
+                "(last_sent_target is None)."
+            )
+
+
+class TestStartupDetection:
+    """Brain restart in mid-state should detect what's actually happening
+    rather than land in SLEEP and force-stop work-in-progress."""
+
+    def test_sleep_to_pib_discharge_when_zen_drained_pibs_active(self):
+        """Restart while Zen is drained and PIBs are providing the load —
+        brain must adopt PIB_DISCHARGE, not SLEEP. Without this, the new
+        PIB heartbeat would force-standby PIBs that are covering demand."""
+        brain = PermissionFSM()
+        d = brain.decide(
+            _steady_reading(p1=400, zen_power=0, zen_soc=10,
+                            pib1=-400, pib2=-400,
+                            pib1_soc=40, pib2_soc=40),
+            t=0,
+        )
+        assert brain.state.value == "PIB_DISCHARGE", (
+            f"Expected PIB_DISCHARGE on restart with drained Zen + active "
+            f"PIBs, got {brain.state.value}."
+        )
+        assert d.pib_mode == "zero", (
+            f"Should adopt zero+discharge_allowed (PIBs already working), "
+            f"got pib_mode={d.pib_mode!r}"
+        )
+        assert d.pib_permissions == ["discharge_allowed"]
+
+
 class TestPIBDischargeExitsWhenEmpty:
     """PIB_DISCHARGE should transition to SLEEP when PIBs are truly empty."""
 

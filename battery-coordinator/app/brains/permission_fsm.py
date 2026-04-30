@@ -93,6 +93,11 @@ class PermissionFSM:
     HELP_ENTER_S = 15       # sustained Zen maxed before waking PIBs
     HELP_EXIT_S = 15        # sustained low load before standbying PIBs
 
+    # Heartbeats — re-assert desired state so silent drift (failed PUT,
+    # external app toggle, integration refresh) self-heals within a bounded
+    # window. Idempotent commands; safe to repeat.
+    PIB_HEARTBEAT_S = 300   # re-send pib_mode/permissions every 5 min
+
     # P1 thresholds
     P1_EXPORT = -100        # P1 below this = exporting (surplus)
     P1_IMPORT = 200         # P1 above this = importing (deficit)
@@ -169,6 +174,12 @@ class PermissionFSM:
         self.last_send_time: float = -999
         self.last_ac_mode: int | None = None
 
+        # Desired PIB state — set on transitions, re-asserted by heartbeat.
+        # None until the first transition fires (no opinion yet → no sends).
+        self._pib_mode_desired: str | None = None
+        self._pib_perms_desired: list[str] | None = None
+        self._pib_send_t: float = -999
+
         self.state = State.SLEEP
         self._zen_step_idx = 0
         self._pib_high_since: float | None = None
@@ -193,6 +204,10 @@ class PermissionFSM:
                  lambda r, _: sum(r.pibs) > abs(self.P1_EXPORT) and r.p1 < self.P1_EXPORT * 2),
                 (Transition(State.DISCHARGE, holdoff_s=0, pib_mode="standby"),
                  lambda r, _: sum(r.pibs) < self.P1_EXPORT and abs(r.zen_power) <= PILOT_W and r.zen_soc > self.zen_soc_min),
+                # Restart while Zen drained + PIBs covering load → adopt
+                # PIB_DISCHARGE so the heartbeat doesn't force-stop them.
+                (Transition(State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]),
+                 lambda r, _: sum(r.pibs) < self.P1_EXPORT and abs(r.zen_power) <= PILOT_W and r.zen_soc <= self.zen_soc_min),
                 # Normal wake
                 (Transition(State.CHARGE, holdoff_s=self.WAKE_CHARGE_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
                  lambda r, _: r.p1 < self.P1_EXPORT and (r.zen_soc < self.zen_soc_max - 1 or _total_charge_cap(r) > 200)),
@@ -200,9 +215,14 @@ class PermissionFSM:
                  lambda r, _: r.p1 > self.P1_IMPORT and (r.zen_soc > self.zen_soc_min or any(s > 1 for s in r.pib_socs))),
             ],
             State.CHARGE: [
-                # Everything full → sleep
-                (Transition(State.SLEEP, holdoff_s=0, pib_mode="standby"),
-                 lambda r, _: _total_charge_cap(r) == 0 and r.zen_soc >= self.zen_soc_max),
+                # Near-full + P1 not importing → sleep. Subsumes literal
+                # 100/100 (which strict cap==0 required) and catches taper
+                # noise (PIBs at 99% with 120W cap each) so PIBs aren't
+                # left awake in zero-mode burning idle.
+                (Transition(State.SLEEP, holdoff_s=self.FLIP_S, pib_mode="standby"),
+                 lambda r, _: all(s >= 99 for s in r.pib_socs)
+                              and r.zen_soc >= self.zen_soc_max - 1
+                              and r.p1 < self.P1_IMPORT),
                 # Surplus gone → discharge
                 (Transition(State.DISCHARGE, holdoff_s=self.FLIP_S, pib_mode="standby"),
                  lambda r, pib_abs: pib_abs < 50 and r.p1 > abs(self.P1_EXPORT)),
@@ -214,8 +234,8 @@ class PermissionFSM:
                 # Zendure empty, PIBs can help → PIB_DISCHARGE
                 (Transition(State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]),
                  lambda r, _: r.zen_soc <= self.zen_soc_min and any(s > 1 for s in r.pib_socs)),
-                # Zendure empty, PIBs empty → sleep with charge-only PIBs ready
-                (Transition(State.SLEEP, holdoff_s=0, pib_mode="zero", pib_permissions=["charge_allowed"]),
+                # Zendure empty, PIBs empty → sleep with full standby.
+                (Transition(State.SLEEP, holdoff_s=0, pib_mode="standby"),
                  lambda r, _: r.zen_soc <= self.zen_soc_min and all(s <= 1 for s in r.pib_socs)),
                 # Zendure maxed → wake PIBs to help
                 (Transition(State.DISCHARGE_HELP, holdoff_s=self.HELP_ENTER_S, pib_mode="zero", pib_permissions=["discharge_allowed"]),
@@ -239,9 +259,10 @@ class PermissionFSM:
                 # Solar returns → charge
                 (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
                  lambda r, _: r.p1 < self.P1_EXPORT),
-                # PIBs empty → sleep. Set charge-only so they auto-capture
-                # the first watt of solar surplus without waiting for CHARGE wake.
-                (Transition(State.SLEEP, holdoff_s=0, pib_mode="zero", pib_permissions=["charge_allowed"]),
+                # PIBs empty → sleep with full standby. Sunrise wake goes
+                # through SLEEP→CHARGE (WAKE_CHARGE_S holdoff); a few
+                # seconds of leak-back trades for hours of standby savings.
+                (Transition(State.SLEEP, holdoff_s=0, pib_mode="standby"),
                  lambda r, _: all(abs(p) < 10 for p in r.pibs) and all(s <= 1 for s in r.pib_socs)),
             ],
         }
@@ -394,6 +415,19 @@ class PermissionFSM:
         # Check transitions
         pib_mode, pib_permissions = self._check_transitions(r, pib_abs, t)
 
+        # Track desired PIB state across ticks so the heartbeat can re-assert
+        # it. Update on transition; otherwise re-emit when PIB_HEARTBEAT_S
+        # has elapsed since the last send.
+        if pib_mode is not None or pib_permissions is not None:
+            self._pib_mode_desired = pib_mode
+            self._pib_perms_desired = pib_permissions
+            self._pib_send_t = t
+        elif (self._pib_mode_desired is not None
+              and (t - self._pib_send_t) >= self.PIB_HEARTBEAT_S):
+            pib_mode = self._pib_mode_desired
+            pib_permissions = self._pib_perms_desired
+            self._pib_send_t = t
+
         # Compute target
         target = self._compute_target(r, pib_abs, t)
 
@@ -455,7 +489,12 @@ class PermissionFSM:
         if elapsed < 5.0:
             return target, False, False
 
-        heartbeat = elapsed >= 30 and target != 0
+        # Heartbeat re-asserts the last command, including target=0
+        # (flash-standby), so if the device drifted out of standby — silent
+        # PUT failure, firmware reboot, external app — we recover within 30s.
+        # `last_sent_target is not None` keeps startup quiet: brain has no
+        # prior state to re-assert.
+        heartbeat = elapsed >= 30 and self.last_sent_target is not None
         send = heartbeat or change >= 50
         return target, send, urgent
 
