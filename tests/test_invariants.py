@@ -58,7 +58,7 @@ class TestNoRapidStateBouncing:
         states = []
         for tick, r in enumerate(readings):
             brain.decide(r, t=tick)
-            state = brain.state.value if hasattr(brain.state, 'value') else brain._phase
+            state = brain.state.value
             states.append(state)
             if len(states) >= 3:
                 if states[-1] == states[-3] and states[-1] != states[-2]:
