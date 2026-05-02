@@ -228,7 +228,6 @@ async def main():
                 elif d.target == 0:
                     ok = await ha_service(session, "rest_command.zendure_standby", {"sn": zen_sn})
                     brain.mark_sent(0, t)
-                    brain.last_ac_mode = None
                     sent = " SENT standby"
                 if sent and not ok:
                     sent += " FAILED!"

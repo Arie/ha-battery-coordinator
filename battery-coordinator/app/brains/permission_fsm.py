@@ -507,3 +507,8 @@ class PermissionFSM:
             self.last_ac_mode = self.AC_CHARGE
         elif target < 0:
             self.last_ac_mode = self.AC_DISCHARGE
+        else:
+            # target=0 (standby) → relay is between modes. The next
+            # non-zero send needs to re-issue the mode-switch command,
+            # which happens iff last_ac_mode != new direction.
+            self.last_ac_mode = None

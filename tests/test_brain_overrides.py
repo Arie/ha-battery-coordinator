@@ -64,3 +64,29 @@ class TestOverrides:
         # Find the "Normal wake to CHARGE" transition (the one with WAKE_CHARGE_S holdoff).
         wake_holdoffs = [t.holdoff_s for t, _ in sleep_transitions if t.holdoff_s > 0]
         assert 99 in wake_holdoffs
+
+
+class TestMarkSent:
+    """mark_sent() owns last_ac_mode bookkeeping; callers shouldn't have to
+    reset it manually."""
+
+    def test_target_zero_clears_last_ac_mode(self):
+        # After a charge, brain knows the relay is in charge mode.
+        b = PermissionFSM()
+        b.mark_sent(800, t=10)
+        assert b.last_ac_mode == PermissionFSM.AC_CHARGE
+
+        # Standby comes next; relay sits between modes. The next non-zero
+        # send must trigger a mode-switch command, which only happens if
+        # last_ac_mode is not equal to the new direction.
+        b.mark_sent(0, t=20)
+        assert b.last_ac_mode is None, (
+            "After target=0 (standby), brain should forget the relay's "
+            "previous direction so the next charge/discharge re-asserts "
+            "the mode-switch command."
+        )
+
+    def test_explicit_ac_mode_overrides_sign(self):
+        b = PermissionFSM()
+        b.mark_sent(0, t=10, ac_mode=PermissionFSM.AC_DISCHARGE)
+        assert b.last_ac_mode == PermissionFSM.AC_DISCHARGE
