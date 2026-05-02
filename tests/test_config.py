@@ -287,6 +287,18 @@ class TestValidate:
             for e in errors
         ), errors
 
+    def test_malformed_float_timeout_surfaces_through_validate(self, clean_env, monkeypatch, tmp_path):
+        # A user typo in READ_TIMEOUT used to crash startup with a bare
+        # ValueError from float() — bypassing the rest of validate(). It
+        # should produce a clean validation error like the int fields do.
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        monkeypatch.setenv("READ_TIMEOUT", "fast")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        errors = c.validate()
+        assert any("READ_TIMEOUT" in e for e in errors), errors
+
     def test_pib_lists_same_length_passes(self, clean_env, monkeypatch, tmp_path):
         # Same-length PIB lists shouldn't add their own validation errors.
         # Need SUPERVISOR_TOKEN since PIB entities trigger HA proxy mode.

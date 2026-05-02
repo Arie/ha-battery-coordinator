@@ -37,6 +37,16 @@ def _safe_int(value, *, field: str, default: int) -> int:
         raise _ConfigParseError(f"{field}: cannot parse {value!r} as int")
 
 
+def _safe_float(value, *, field: str, default: float) -> float:
+    """Float counterpart of _safe_int — same purpose, same error path."""
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise _ConfigParseError(f"{field}: cannot parse {value!r} as float")
+
+
 class _ConfigParseError(ValueError):
     """Internal error raised by _safe_int / _safe_float and caught by Config
     so validate() can surface a coherent list of problems instead of crashing
@@ -151,8 +161,8 @@ class Config:
             for key, default in _BRAIN_DEFAULTS.items()
         }
 
-        self.read_timeout = float(os.getenv("READ_TIMEOUT", "3"))
-        self.write_timeout = float(os.getenv("WRITE_TIMEOUT", "5"))
+        self.read_timeout = _safe_float(os.getenv("READ_TIMEOUT"), field="READ_TIMEOUT", default=3.0)
+        self.write_timeout = _safe_float(os.getenv("WRITE_TIMEOUT"), field="WRITE_TIMEOUT", default=5.0)
 
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
         self.dry_run = os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
