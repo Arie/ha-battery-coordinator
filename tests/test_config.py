@@ -140,9 +140,11 @@ class TestAddonOptionsPath:
         c = Config(options_path=path)
         assert c.zendure_ip == "OPTIONS_VALUE"
 
-    def test_pib_entity_lists_default_to_homewizard_names(self, clean_env, tmp_path):
-        # When omitted from options.json, lists are empty (the schema
-        # defaults live in config.yaml's `options` block, not in code).
+    def test_pib_entity_lists_default_to_empty_when_omitted(self, clean_env, tmp_path):
+        # The default HomeWizard entity names live in config.yaml's `options`
+        # block (so HA Supervisor pre-fills the form). Config() itself does
+        # NOT inject defaults — when a key is absent from options.json, the
+        # list is empty.
         path = self._write_options(tmp_path, {
             "zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z",
         })
