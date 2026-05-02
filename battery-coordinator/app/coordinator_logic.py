@@ -61,8 +61,8 @@ class Reading:
 class Decision:
     """What the coordinator decided this tick."""
 
-    target: int            # Zendure target power (W). +charge / -discharge / 0 standby
-    zone: str              # FSM state name (SLEEP / CHARGE / DISCHARGE / ...)
-    send: bool             # whether to actually send the target to Zendure
-    pib_mode: str | None = None             # "standby", "zero", or None = no change
+    target: int  # Zendure target power (W). +charge / -discharge / 0 standby
+    zone: str  # FSM state name (SLEEP / CHARGE / DISCHARGE / ...)
+    send: bool  # whether to actually send the target to Zendure
+    pib_mode: str | None = None  # "standby", "zero", or None = no change
     pib_permissions: list[str] | None = None

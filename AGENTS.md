@@ -106,8 +106,10 @@ tests/
 ## Testing
 
 ```bash
-uv run python -m pytest tests/                # All tests
-uv run ruff check battery-coordinator/app/ tests/  # Lint
+uv run python -m pytest tests/                       # All tests
+uv run ruff check battery-coordinator/app/ tests/    # Lint
+uv run ruff format --check battery-coordinator/app/ tests/  # Format check
+uv run ruff format battery-coordinator/app/ tests/   # Apply format
 ```
 
 ## Development workflow
@@ -118,7 +120,8 @@ uv run ruff check battery-coordinator/app/ tests/  # Lint
 2. Fix the code.
 3. Run all tests: `uv run python -m pytest tests/`
 4. Run lint: `uv run ruff check battery-coordinator/app/ tests/`
-5. Commit (one focused change per commit, imperative-mood subject).
+5. Run format check: `uv run ruff format --check battery-coordinator/app/ tests/` (or apply with `ruff format`)
+6. Commit (one focused change per commit, imperative-mood subject).
 
 ## Constants reference
 

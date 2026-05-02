@@ -52,6 +52,7 @@ class _ConfigParseError(ValueError):
     so validate() can surface a coherent list of problems instead of crashing
     on the first bad field."""
 
+
 # Single source of truth for brain defaults — defined on PermissionFSM so
 # the bare PermissionFSM() constructor and the Config() path can't drift.
 _BRAIN_DEFAULTS = PermissionFSM.DEFAULTS
@@ -152,7 +153,9 @@ class Config:
         self.ha_token = os.getenv("HA_TOKEN", "")
 
         self.zen_max_charge_w = _safe_int(os.getenv("ZEN_MAX_CHARGE_W"), field="ZEN_MAX_CHARGE_W", default=2400)
-        self.zen_max_discharge_w = _safe_int(os.getenv("ZEN_MAX_DISCHARGE_W"), field="ZEN_MAX_DISCHARGE_W", default=2400)
+        self.zen_max_discharge_w = _safe_int(
+            os.getenv("ZEN_MAX_DISCHARGE_W"), field="ZEN_MAX_DISCHARGE_W", default=2400
+        )
         self.zen_soc_min = _safe_int(os.getenv("ZEN_SOC_MIN"), field="ZEN_SOC_MIN", default=10)
         self.zen_soc_max = _safe_int(os.getenv("ZEN_SOC_MAX"), field="ZEN_SOC_MAX", default=100)
 
@@ -203,10 +206,7 @@ class Config:
         # crash startup at log.setLevel() with a bare ValueError, after
         # validate() had already declared the config OK. Catch it here.
         if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
-            errors.append(
-                f"log_level must be one of debug/info/warning/error "
-                f"(got {self.log_level!r})"
-            )
+            errors.append(f"log_level must be one of debug/info/warning/error (got {self.log_level!r})")
         # Both lists must be configured together. Setting only one makes
         # device_io pad the other with zeros, which the brain reads as
         # ghost 0%-SOC PIBs (or 0W phantom power) and over-corrects on.

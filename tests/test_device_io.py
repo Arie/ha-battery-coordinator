@@ -19,8 +19,7 @@ from device_io import HWP1Meter, OptionalHASensor, ZendureDevice
 
 
 class _FakeResponse:
-    def __init__(self, *, status: int = 200, payload: dict | None = None,
-                 raise_on_get: Exception | None = None):
+    def __init__(self, *, status: int = 200, payload: dict | None = None, raise_on_get: Exception | None = None):
         self.status = status
         self._payload = payload or {}
         self._raise = raise_on_get
@@ -76,10 +75,12 @@ class TestZendureReadResilience:
     @pytest.mark.asyncio
     async def test_read_failure_returns_last_known(self):
         zen = ZendureDevice("1.2.3.4")
-        session = _FakeSession([
-            {"status": 200, "payload": _GOOD_REPORT},
-            {"status": 500, "payload": {}},
-        ])
+        session = _FakeSession(
+            [
+                {"status": 200, "payload": _GOOD_REPORT},
+                {"status": 500, "payload": {}},
+            ]
+        )
 
         first = await zen.read(session)
         assert first.power == 800
@@ -95,10 +96,12 @@ class TestZendureReadResilience:
     @pytest.mark.asyncio
     async def test_exception_returns_last_known(self):
         zen = ZendureDevice("1.2.3.4")
-        session = _FakeSession([
-            {"status": 200, "payload": _GOOD_REPORT},
-            {"raise_on_get": ConnectionError("network blip")},
-        ])
+        session = _FakeSession(
+            [
+                {"status": 200, "payload": _GOOD_REPORT},
+                {"raise_on_get": ConnectionError("network blip")},
+            ]
+        )
 
         first = await zen.read(session)
         assert first.power == 800
@@ -127,11 +130,13 @@ class TestZendureReadResilience:
         # SN was already cached by the previous design; this just confirms
         # the new last-known caching doesn't accidentally discard it.
         zen = ZendureDevice("1.2.3.4")
-        session = _FakeSession([
-            {"status": 200, "payload": _GOOD_REPORT},
-            {"raise_on_get": TimeoutError()},
-            {"raise_on_get": TimeoutError()},
-        ])
+        session = _FakeSession(
+            [
+                {"status": 200, "payload": _GOOD_REPORT},
+                {"raise_on_get": TimeoutError()},
+                {"raise_on_get": TimeoutError()},
+            ]
+        )
         await zen.read(session)
         await zen.read(session)
         third = await zen.read(session)
@@ -158,32 +163,38 @@ class TestZendureFetchSN:
     async def test_retries_past_empty(self):
         empty = {"sn": "", "properties": {}}
         zen = ZendureDevice("1.2.3.4")
-        session = _FakeSession([
-            {"status": 200, "payload": empty},
-            {"status": 200, "payload": empty},
-            {"status": 200, "payload": _GOOD_REPORT},
-        ])
+        session = _FakeSession(
+            [
+                {"status": 200, "payload": empty},
+                {"status": 200, "payload": empty},
+                {"status": 200, "payload": _GOOD_REPORT},
+            ]
+        )
         sn = await zen.fetch_sn(session, max_attempts=10, delay_s=0)
         assert sn == "HEC-TEST"
 
     @pytest.mark.asyncio
     async def test_retries_past_exceptions(self):
         zen = ZendureDevice("1.2.3.4")
-        session = _FakeSession([
-            {"raise_on_get": ConnectionError("dead")},
-            {"raise_on_get": TimeoutError()},
-            {"status": 200, "payload": _GOOD_REPORT},
-        ])
+        session = _FakeSession(
+            [
+                {"raise_on_get": ConnectionError("dead")},
+                {"raise_on_get": TimeoutError()},
+                {"status": 200, "payload": _GOOD_REPORT},
+            ]
+        )
         sn = await zen.fetch_sn(session, max_attempts=10, delay_s=0)
         assert sn == "HEC-TEST"
 
     @pytest.mark.asyncio
     async def test_returns_empty_after_max_attempts(self):
         zen = ZendureDevice("1.2.3.4")
-        session = _FakeSession([
-            {"raise_on_get": ConnectionError("nope")},
-            {"raise_on_get": ConnectionError("nope")},
-        ])
+        session = _FakeSession(
+            [
+                {"raise_on_get": ConnectionError("nope")},
+                {"raise_on_get": ConnectionError("nope")},
+            ]
+        )
         sn = await zen.fetch_sn(session, max_attempts=2, delay_s=0)
         assert sn == ""
 
@@ -282,16 +293,18 @@ class TestHWP1ReadResilience:
     @pytest.mark.asyncio
     async def test_measurement_failure_returns_last_known_grid_power(self):
         meter = HWP1Meter("1.2.3.4", "tok")
-        session = _FakeMultiURLSession({
-            "/api/measurement": [
-                {"status": 200, "payload": _GOOD_MEASUREMENT},
-                {"raise_on_get": ConnectionError("blip")},
-            ],
-            "/api/batteries": [
-                {"status": 200, "payload": _GOOD_BATTERIES},
-                {"status": 200, "payload": _GOOD_BATTERIES},
-            ],
-        })
+        session = _FakeMultiURLSession(
+            {
+                "/api/measurement": [
+                    {"status": 200, "payload": _GOOD_MEASUREMENT},
+                    {"raise_on_get": ConnectionError("blip")},
+                ],
+                "/api/batteries": [
+                    {"status": 200, "payload": _GOOD_BATTERIES},
+                    {"status": 200, "payload": _GOOD_BATTERIES},
+                ],
+            }
+        )
         first = await meter.read(session)
         assert first.grid_power == 850.0
 
@@ -305,16 +318,18 @@ class TestHWP1ReadResilience:
     @pytest.mark.asyncio
     async def test_batteries_failure_returns_last_known_pib_state(self):
         meter = HWP1Meter("1.2.3.4", "tok")
-        session = _FakeMultiURLSession({
-            "/api/measurement": [
-                {"status": 200, "payload": _GOOD_MEASUREMENT},
-                {"status": 200, "payload": _GOOD_MEASUREMENT},
-            ],
-            "/api/batteries": [
-                {"status": 200, "payload": _GOOD_BATTERIES},
-                {"raise_on_get": TimeoutError()},
-            ],
-        })
+        session = _FakeMultiURLSession(
+            {
+                "/api/measurement": [
+                    {"status": 200, "payload": _GOOD_MEASUREMENT},
+                    {"status": 200, "payload": _GOOD_MEASUREMENT},
+                ],
+                "/api/batteries": [
+                    {"status": 200, "payload": _GOOD_BATTERIES},
+                    {"raise_on_get": TimeoutError()},
+                ],
+            }
+        )
         first = await meter.read(session)
         assert first.pib_power == 600.0
         assert first.pib_count == 2
@@ -332,16 +347,18 @@ class TestHWP1ReadResilience:
         # return 0 from data.get("power_w", 0). Status check + last-known
         # should suppress that.
         meter = HWP1Meter("1.2.3.4", "tok")
-        session = _FakeMultiURLSession({
-            "/api/measurement": [
-                {"status": 200, "payload": _GOOD_MEASUREMENT},
-                {"status": 401, "payload": {"error": "unauthorized"}},
-            ],
-            "/api/batteries": [
-                {"status": 200, "payload": _GOOD_BATTERIES},
-                {"status": 200, "payload": _GOOD_BATTERIES},
-            ],
-        })
+        session = _FakeMultiURLSession(
+            {
+                "/api/measurement": [
+                    {"status": 200, "payload": _GOOD_MEASUREMENT},
+                    {"status": 401, "payload": {"error": "unauthorized"}},
+                ],
+                "/api/batteries": [
+                    {"status": 200, "payload": _GOOD_BATTERIES},
+                    {"status": 200, "payload": _GOOD_BATTERIES},
+                ],
+            }
+        )
         await meter.read(session)
         second = await meter.read(session)
         assert second.grid_power == 850.0, (
@@ -354,10 +371,12 @@ class TestHWP1ReadResilience:
     async def test_first_read_failure_returns_zeros(self):
         # No last-known to fall back to; defaults are correct.
         meter = HWP1Meter("1.2.3.4", "tok")
-        session = _FakeMultiURLSession({
-            "/api/measurement": [{"raise_on_get": ConnectionError("dead on arrival")}],
-            "/api/batteries": [{"raise_on_get": ConnectionError("dead on arrival")}],
-        })
+        session = _FakeMultiURLSession(
+            {
+                "/api/measurement": [{"raise_on_get": ConnectionError("dead on arrival")}],
+                "/api/batteries": [{"raise_on_get": ConnectionError("dead on arrival")}],
+            }
+        )
         status = await meter.read(session)
         assert status.grid_power == 0.0
         assert status.pib_power == 0.0
@@ -377,10 +396,12 @@ class TestOptionalHASensorStaleness:
     @pytest.mark.asyncio
     async def test_returns_cached_within_window(self):
         sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
-        session = _FakeStateSession([
-            {"status": 200, "payload": {"state": "75"}},
-            {"raise_on_get": ConnectionError("blip")},
-        ])
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "75"}},
+                {"raise_on_get": ConnectionError("blip")},
+            ]
+        )
         first = await sensor.read(session, now=0.0)
         assert first == 75.0
 
@@ -391,11 +412,13 @@ class TestOptionalHASensorStaleness:
     @pytest.mark.asyncio
     async def test_returns_zero_after_stale_window(self):
         sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
-        session = _FakeStateSession([
-            {"status": 200, "payload": {"state": "75"}},
-            {"raise_on_get": ConnectionError("HA down")},
-            {"raise_on_get": ConnectionError("HA still down")},
-        ])
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "75"}},
+                {"raise_on_get": ConnectionError("HA down")},
+                {"raise_on_get": ConnectionError("HA still down")},
+            ]
+        )
         await sensor.read(session, now=0.0)
         await sensor.read(session, now=30.0)
 
@@ -409,12 +432,14 @@ class TestOptionalHASensorStaleness:
     @pytest.mark.asyncio
     async def test_successful_read_resets_stale_window(self):
         sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
-        session = _FakeStateSession([
-            {"status": 200, "payload": {"state": "75"}},
-            {"raise_on_get": ConnectionError("blip")},
-            {"status": 200, "payload": {"state": "60"}},
-            {"raise_on_get": ConnectionError("blip")},
-        ])
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "75"}},
+                {"raise_on_get": ConnectionError("blip")},
+                {"status": 200, "payload": {"state": "60"}},
+                {"raise_on_get": ConnectionError("blip")},
+            ]
+        )
         await sensor.read(session, now=0.0)
         await sensor.read(session, now=30.0)
         # Recovery: new read at t=50, cache resets.
@@ -437,11 +462,13 @@ class TestOptionalHASensorHTTPStatus:
     @pytest.mark.asyncio
     async def test_non_200_does_not_poison_cache(self):
         sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
-        session = _FakeStateSession([
-            {"status": 200, "payload": {"state": "75"}},
-            # 500 with a JSON-shaped error body that has a 'state' key.
-            {"status": 500, "payload": {"state": "999"}},
-        ])
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "75"}},
+                # 500 with a JSON-shaped error body that has a 'state' key.
+                {"status": 500, "payload": {"state": "999"}},
+            ]
+        )
         first = await sensor.read(session, now=0.0)
         assert first == 75.0
 
@@ -455,19 +482,18 @@ class TestOptionalHASensorHTTPStatus:
     @pytest.mark.asyncio
     async def test_401_falls_through_to_cache(self):
         sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
-        session = _FakeStateSession([
-            {"status": 200, "payload": {"state": "75"}},
-            # 401 Unauthorized (e.g. token expired) — typical body has
-            # 'message' but not 'state'. Even so, status check should
-            # short-circuit before touching the body.
-            {"status": 401, "payload": {"message": "API password missing"}},
-        ])
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "75"}},
+                # 401 Unauthorized (e.g. token expired) — typical body has
+                # 'message' but not 'state'. Even so, status check should
+                # short-circuit before touching the body.
+                {"status": 401, "payload": {"message": "API password missing"}},
+            ]
+        )
         await sensor.read(session, now=0.0)
         v = await sensor.read(session, now=30.0)
-        assert v == 75.0, (
-            "401 response should fall through to last-known cache, not "
-            "leak through as 0.0."
-        )
+        assert v == 75.0, "401 response should fall through to last-known cache, not leak through as 0.0."
 
     @pytest.mark.asyncio
     async def test_non_200_first_read_returns_default_zero(self):

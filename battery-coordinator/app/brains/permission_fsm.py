@@ -86,8 +86,8 @@ class PermissionFSM:
 
     # Step timing
     STEP_HOLDOFF = DEFAULTS["step_holdoff_s"]
-    STEP_HOLDOFF_FAST = 5   # seconds before fast step-up (PIBs maxed)
-    STEP_DOWN_COOLDOWN = 30 # seconds after step-up before allowing step-down
+    STEP_HOLDOFF_FAST = 5  # seconds before fast step-up (PIBs maxed)
+    STEP_DOWN_COOLDOWN = 30  # seconds after step-up before allowing step-down
 
     # Transition holdoffs
     WAKE_CHARGE_S = DEFAULTS["wake_charge_s"]
@@ -99,7 +99,7 @@ class PermissionFSM:
     # Heartbeats — re-assert desired state so silent drift (failed PUT,
     # external app toggle, integration refresh) self-heals within a bounded
     # window. Idempotent commands; safe to repeat.
-    PIB_HEARTBEAT_S = 300   # re-send pib_mode/permissions every 5 min
+    PIB_HEARTBEAT_S = 300  # re-send pib_mode/permissions every 5 min
 
     # P1 thresholds
     P1_EXPORT = DEFAULTS["p1_export_w"]
@@ -110,11 +110,11 @@ class PermissionFSM:
     # P1_EXPORT so tuning the export threshold doesn't accidentally also
     # change PIB direction detection — they're different signals (grid-side
     # vs battery-side) that happened to share a magnitude.
-    PIB_CHARGE_DETECT = 100      # combined PIB > this on startup → adopt CHARGE
+    PIB_CHARGE_DETECT = 100  # combined PIB > this on startup → adopt CHARGE
     PIB_DISCHARGE_DETECT = -100  # combined PIB < this on startup → adopt DISCHARGE
 
     # Zendure capacity thresholds
-    ZEN_MAXED_FRAC = 0.95   # Zendure above this fraction of max → considered maxed
+    ZEN_MAXED_FRAC = 0.95  # Zendure above this fraction of max → considered maxed
     ZEN_HELP_EXIT_FRAC = 0.8  # total discharge below this fraction → PIBs redundant
 
     # PIB taper
@@ -211,73 +211,140 @@ class PermissionFSM:
                 # Startup: detect hardware already active. 2s holdoff so a
                 # single noisy reading at process start can't bypass the
                 # WAKE_*_S guards below — sustained agreement only.
-                (Transition(State.CHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.zen_power > PILOT_W),
-                (Transition(State.DISCHARGE, holdoff_s=2, pib_mode="standby"),
-                 lambda r, _: r.zen_power < -PILOT_W),
-                (Transition(State.CHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: sum(r.pibs) > self.PIB_CHARGE_DETECT and r.p1 < self.P1_EXPORT * 2),
-                (Transition(State.DISCHARGE, holdoff_s=2, pib_mode="standby"),
-                 lambda r, _: sum(r.pibs) < self.PIB_DISCHARGE_DETECT and abs(r.zen_power) <= PILOT_W and r.zen_soc > self.zen_soc_min),
+                (
+                    Transition(State.CHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["charge_allowed"]),
+                    lambda r, _: r.zen_power > PILOT_W,
+                ),
+                (Transition(State.DISCHARGE, holdoff_s=2, pib_mode="standby"), lambda r, _: r.zen_power < -PILOT_W),
+                (
+                    Transition(State.CHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["charge_allowed"]),
+                    lambda r, _: sum(r.pibs) > self.PIB_CHARGE_DETECT and r.p1 < self.P1_EXPORT * 2,
+                ),
+                (
+                    Transition(State.DISCHARGE, holdoff_s=2, pib_mode="standby"),
+                    lambda r, _: (
+                        sum(r.pibs) < self.PIB_DISCHARGE_DETECT
+                        and abs(r.zen_power) <= PILOT_W
+                        and r.zen_soc > self.zen_soc_min
+                    ),
+                ),
                 # Restart while Zen drained + PIBs covering load → adopt
                 # PIB_DISCHARGE so the heartbeat doesn't force-stop them.
-                (Transition(State.PIB_DISCHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["discharge_allowed"]),
-                 lambda r, _: sum(r.pibs) < self.PIB_DISCHARGE_DETECT and abs(r.zen_power) <= PILOT_W and r.zen_soc <= self.zen_soc_min),
+                (
+                    Transition(
+                        State.PIB_DISCHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["discharge_allowed"]
+                    ),
+                    lambda r, _: (
+                        sum(r.pibs) < self.PIB_DISCHARGE_DETECT
+                        and abs(r.zen_power) <= PILOT_W
+                        and r.zen_soc <= self.zen_soc_min
+                    ),
+                ),
                 # Normal wake
-                (Transition(State.CHARGE, holdoff_s=self.WAKE_CHARGE_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.p1 < self.P1_EXPORT and (r.zen_soc < self.zen_soc_max - 1 or _total_charge_cap(r) > 200)),
-                (Transition(State.DISCHARGE, holdoff_s=self.WAKE_DISCHARGE_S, pib_mode="standby"),
-                 lambda r, _: r.p1 > self.P1_IMPORT and (r.zen_soc > self.zen_soc_min or any(s > 1 for s in r.pib_socs))),
+                (
+                    Transition(
+                        State.CHARGE, holdoff_s=self.WAKE_CHARGE_S, pib_mode="zero", pib_permissions=["charge_allowed"]
+                    ),
+                    lambda r, _: (
+                        r.p1 < self.P1_EXPORT and (r.zen_soc < self.zen_soc_max - 1 or _total_charge_cap(r) > 200)
+                    ),
+                ),
+                (
+                    Transition(State.DISCHARGE, holdoff_s=self.WAKE_DISCHARGE_S, pib_mode="standby"),
+                    lambda r, _: (
+                        r.p1 > self.P1_IMPORT and (r.zen_soc > self.zen_soc_min or any(s > 1 for s in r.pib_socs))
+                    ),
+                ),
             ],
             State.CHARGE: [
                 # Near-full + P1 not importing → sleep. Subsumes literal
                 # 100/100 (which strict cap==0 required) and catches taper
                 # noise (PIBs at 99% with 120W cap each) so PIBs aren't
                 # left awake in zero-mode burning idle.
-                (Transition(State.SLEEP, holdoff_s=self.FLIP_S, pib_mode="standby"),
-                 lambda r, _: all(s >= 99 for s in r.pib_socs)
-                              and r.zen_soc >= self.zen_soc_max - 1
-                              and r.p1 < self.P1_IMPORT),
+                (
+                    Transition(State.SLEEP, holdoff_s=self.FLIP_S, pib_mode="standby"),
+                    lambda r, _: (
+                        all(s >= 99 for s in r.pib_socs) and r.zen_soc >= self.zen_soc_max - 1 and r.p1 < self.P1_IMPORT
+                    ),
+                ),
                 # Surplus gone → discharge
-                (Transition(State.DISCHARGE, holdoff_s=self.FLIP_S, pib_mode="standby"),
-                 lambda r, pib_abs: pib_abs < 50 and r.p1 > abs(self.P1_EXPORT)),
+                (
+                    Transition(State.DISCHARGE, holdoff_s=self.FLIP_S, pib_mode="standby"),
+                    lambda r, pib_abs: pib_abs < 50 and r.p1 > abs(self.P1_EXPORT),
+                ),
             ],
             State.DISCHARGE: [
                 # Solar returns → charge
-                (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.p1 < self.P1_EXPORT),
+                (
+                    Transition(
+                        State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]
+                    ),
+                    lambda r, _: r.p1 < self.P1_EXPORT,
+                ),
                 # Zendure empty, PIBs can help → PIB_DISCHARGE
-                (Transition(State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]),
-                 lambda r, _: r.zen_soc <= self.zen_soc_min and any(s > 1 for s in r.pib_socs)),
+                (
+                    Transition(
+                        State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]
+                    ),
+                    lambda r, _: r.zen_soc <= self.zen_soc_min and any(s > 1 for s in r.pib_socs),
+                ),
                 # Zendure empty, PIBs empty → sleep with full standby.
-                (Transition(State.SLEEP, holdoff_s=0, pib_mode="standby"),
-                 lambda r, _: r.zen_soc <= self.zen_soc_min and all(s <= 1 for s in r.pib_socs)),
+                (
+                    Transition(State.SLEEP, holdoff_s=0, pib_mode="standby"),
+                    lambda r, _: r.zen_soc <= self.zen_soc_min and all(s <= 1 for s in r.pib_socs),
+                ),
                 # Zendure maxed → wake PIBs to help
-                (Transition(State.DISCHARGE_HELP, holdoff_s=self.HELP_ENTER_S, pib_mode="zero", pib_permissions=["discharge_allowed"]),
-                 lambda r, _: abs(int(r.zen_power - r.p1)) >= self.max_discharge * self.ZEN_MAXED_FRAC and r.p1 > abs(self.P1_EXPORT)),
+                (
+                    Transition(
+                        State.DISCHARGE_HELP,
+                        holdoff_s=self.HELP_ENTER_S,
+                        pib_mode="zero",
+                        pib_permissions=["discharge_allowed"],
+                    ),
+                    lambda r, _: (
+                        abs(int(r.zen_power - r.p1)) >= self.max_discharge * self.ZEN_MAXED_FRAC
+                        and r.p1 > abs(self.P1_EXPORT)
+                    ),
+                ),
             ],
             State.DISCHARGE_HELP: [
                 # Solar returns → charge
-                (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.p1 < self.P1_EXPORT),
+                (
+                    Transition(
+                        State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]
+                    ),
+                    lambda r, _: r.p1 < self.P1_EXPORT,
+                ),
                 # Zendure can handle alone → back to solo
                 # P1 negative = over-discharging, load dropped → back to NOM solo.
                 # 3s holdoff filters the 1-2 tick PIB activation transient
                 # (HW P1 controller slams 0→max in one tick on entry, briefly
                 # overshooting load by ~1.6kW). Real load drops still exit,
                 # just 3s later instead of instantly.
-                (Transition(State.DISCHARGE, holdoff_s=3, pib_mode="standby"),
-                 lambda r, _: r.p1 < self.P1_OVER_DISCHARGE),
-                (Transition(State.DISCHARGE, holdoff_s=self.HELP_EXIT_S, pib_mode="standby"),
-                 lambda r, _: abs(r.zen_power) + max(0, -sum(r.pibs)) < self.max_discharge * self.ZEN_HELP_EXIT_FRAC),
+                (
+                    Transition(State.DISCHARGE, holdoff_s=3, pib_mode="standby"),
+                    lambda r, _: r.p1 < self.P1_OVER_DISCHARGE,
+                ),
+                (
+                    Transition(State.DISCHARGE, holdoff_s=self.HELP_EXIT_S, pib_mode="standby"),
+                    lambda r, _: abs(r.zen_power) + max(0, -sum(r.pibs)) < self.max_discharge * self.ZEN_HELP_EXIT_FRAC,
+                ),
                 # Zendure empty → PIBs take over
-                (Transition(State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]),
-                 lambda r, _: r.zen_soc <= self.zen_soc_min),
+                (
+                    Transition(
+                        State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]
+                    ),
+                    lambda r, _: r.zen_soc <= self.zen_soc_min,
+                ),
             ],
             State.PIB_DISCHARGE: [
                 # Solar returns → charge
-                (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: r.p1 < self.P1_EXPORT),
+                (
+                    Transition(
+                        State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]
+                    ),
+                    lambda r, _: r.p1 < self.P1_EXPORT,
+                ),
                 # PIBs empty → sleep with full standby. 3s holdoff so PIB
                 # power sensor noise (briefly reading 12W when it should be
                 # 0) doesn't keep us pinned out of SLEEP; we want sustained
@@ -285,8 +352,10 @@ class PermissionFSM:
                 # Sunrise wake goes through SLEEP→CHARGE (WAKE_CHARGE_S
                 # holdoff); a few seconds of leak-back trades for hours of
                 # standby savings.
-                (Transition(State.SLEEP, holdoff_s=3, pib_mode="standby"),
-                 lambda r, _: all(abs(p) < 10 for p in r.pibs) and all(s <= 1 for s in r.pib_socs)),
+                (
+                    Transition(State.SLEEP, holdoff_s=3, pib_mode="standby"),
+                    lambda r, _: all(abs(p) < 10 for p in r.pibs) and all(s <= 1 for s in r.pib_socs),
+                ),
             ],
         }
 
@@ -468,8 +537,7 @@ class PermissionFSM:
             self._pib_mode_desired = pib_mode
             self._pib_perms_desired = pib_permissions
             self._pib_send_t = t
-        elif (self._pib_mode_desired is not None
-              and (t - self._pib_send_t) >= self.PIB_HEARTBEAT_S):
+        elif self._pib_mode_desired is not None and (t - self._pib_send_t) >= self.PIB_HEARTBEAT_S:
             pib_mode = self._pib_mode_desired
             pib_permissions = self._pib_perms_desired
             self._pib_send_t = t

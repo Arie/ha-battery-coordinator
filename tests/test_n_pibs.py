@@ -17,8 +17,7 @@ from brains.permission_fsm import PermissionFSM, _total_charge_cap, _all_in_tape
 
 
 def _r(p1, pibs, pib_socs, *, zen_power=0, zen_soc=50, solar=0):
-    return Reading(p1=p1, pibs=pibs, pib_socs=pib_socs,
-                   zen_power=zen_power, zen_soc=zen_soc, solar=solar)
+    return Reading(p1=p1, pibs=pibs, pib_socs=pib_socs, zen_power=zen_power, zen_soc=zen_soc, solar=solar)
 
 
 class TestReadingConstruction:
@@ -42,8 +41,7 @@ class TestReadingConstruction:
 
     def test_mismatched_lengths_rejected(self):
         with pytest.raises(ValueError, match="must be the same length"):
-            Reading(p1=0, pibs=[100, 200], pib_socs=[50],
-                    zen_power=0, zen_soc=50)
+            Reading(p1=0, pibs=[100, 200], pib_socs=[50], zen_power=0, zen_soc=50)
 
 
 class TestHelpers:
@@ -73,8 +71,7 @@ class TestBrainWithFourPibs:
         brain = PermissionFSM()
         for tick in range(20):
             brain.decide(
-                _r(p1=-500, pibs=[0, 0, 0, 0], pib_socs=[50, 50, 50, 50],
-                   solar=2000, zen_soc=20),
+                _r(p1=-500, pibs=[0, 0, 0, 0], pib_socs=[50, 50, 50, 50], solar=2000, zen_soc=20),
                 t=tick,
             )
         assert brain.state.value == "CHARGE"
@@ -84,9 +81,7 @@ class TestBrainWithFourPibs:
         brain = PermissionFSM()
         brain.state = brain.state.__class__("CHARGE")
         d = brain.decide(
-            _r(p1=-500, pibs=[800, 800, 800, 240],
-               pib_socs=[50, 50, 50, 97],
-               zen_power=0, zen_soc=50, solar=4000),
+            _r(p1=-500, pibs=[800, 800, 800, 240], pib_socs=[50, 50, 50, 97], zen_power=0, zen_soc=50, solar=4000),
             t=0,
         )
         # NOM mode would target near-max charge; stepped mode starts at 0.
@@ -96,9 +91,14 @@ class TestBrainWithFourPibs:
         brain = PermissionFSM()
         brain.state = brain.state.__class__("CHARGE")
         d = brain.decide(
-            _r(p1=-500, pibs=[100, 100, 100, 100],
-               pib_socs=[97, 98, 97, 98],  # all in taper (caps 240 / 180)
-               zen_power=400, zen_soc=50, solar=2000),
+            _r(
+                p1=-500,
+                pibs=[100, 100, 100, 100],
+                pib_socs=[97, 98, 97, 98],  # all in taper (caps 240 / 180)
+                zen_power=400,
+                zen_soc=50,
+                solar=2000,
+            ),
             t=0,
         )
         # NOM: target = zen_power - p1 = 400 - (-500) = 900
@@ -109,8 +109,7 @@ class TestBrainWithFourPibs:
         brain.state = brain.state.__class__("PIB_DISCHARGE")
         for tick in range(5):
             brain.decide(
-                _r(p1=300, pibs=[0, 0, 0, 0], pib_socs=[0, 0, 0, 0],
-                   zen_soc=10),
+                _r(p1=300, pibs=[0, 0, 0, 0], pib_socs=[0, 0, 0, 0], zen_soc=10),
                 t=tick,
             )
         assert brain.state.value == "SLEEP"
@@ -120,8 +119,7 @@ class TestBrainWithFourPibs:
         brain.state = brain.state.__class__("PIB_DISCHARGE")
         for tick in range(5):
             brain.decide(
-                _r(p1=300, pibs=[0, 0, 0, -100],
-                   pib_socs=[0, 0, 0, 25], zen_soc=10),
+                _r(p1=300, pibs=[0, 0, 0, -100], pib_socs=[0, 0, 0, 25], zen_soc=10),
                 t=tick,
             )
         # PIB 4 still has charge → don't go to SLEEP.

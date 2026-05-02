@@ -33,8 +33,7 @@ def _random_reading(rng, zen_soc=50, pib1_soc=50, pib2_soc=50):
     )
 
 
-def _steady_reading(p1=0, solar=0, zen_power=0, zen_soc=50, pib1=0, pib2=0,
-                    pib1_soc=50, pib2_soc=50):
+def _steady_reading(p1=0, solar=0, zen_power=0, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50):
     return Reading(
         p1=p1,
         pibs=[pib1, pib2],
@@ -74,19 +73,22 @@ class TestNoRapidStateBouncing:
         for tick in range(200):
             # PIB1 oscillates 99↔100%, PIB2 at 100%
             pib1_soc = 100 if tick % 4 < 2 else 99
-            readings.append(_steady_reading(
-                p1=-2500, solar=3000, zen_soc=100,
-                pib1_soc=pib1_soc, pib2_soc=100,
-            ))
+            readings.append(
+                _steady_reading(
+                    p1=-2500,
+                    solar=3000,
+                    zen_soc=100,
+                    pib1_soc=pib1_soc,
+                    pib2_soc=100,
+                )
+            )
         bounces = self._count_bounces(brain, readings)
         assert bounces <= 2, f"Bounced {bounces} times at PIB 99/100% boundary"
 
     def test_no_bounce_all_full(self):
         """All batteries at 100%, exporting — should not bounce."""
         brain = PermissionFSM()
-        readings = [_steady_reading(p1=-3000, solar=4000, zen_soc=100,
-                                     pib1_soc=100, pib2_soc=100)
-                    for _ in range(200)]
+        readings = [_steady_reading(p1=-3000, solar=4000, zen_soc=100, pib1_soc=100, pib2_soc=100) for _ in range(200)]
         bounces = self._count_bounces(brain, readings)
         assert bounces <= 2, f"Bounced {bounces} times with all batteries full"
 
@@ -95,18 +97,14 @@ class TestNoRapidStateBouncing:
         bounce SLEEP→DISCHARGE→PIB_DISCHARGE→SLEEP.
         Production bug 2026-04-10 07:41."""
         brain = PermissionFSM()
-        readings = [_steady_reading(p1=300, solar=150, zen_soc=10,
-                                     pib1_soc=0, pib2_soc=0)
-                    for _ in range(200)]
+        readings = [_steady_reading(p1=300, solar=150, zen_soc=10, pib1_soc=0, pib2_soc=0) for _ in range(200)]
         bounces = self._count_bounces(brain, readings)
         assert bounces <= 2, f"Bounced {bounces} times with all batteries empty and importing"
 
     def test_no_bounce_all_empty(self):
         """All batteries empty, importing — should not bounce."""
         brain = PermissionFSM()
-        readings = [_steady_reading(p1=500, solar=0, zen_soc=10,
-                                     pib1_soc=0, pib2_soc=0)
-                    for _ in range(200)]
+        readings = [_steady_reading(p1=500, solar=0, zen_soc=10, pib1_soc=0, pib2_soc=0) for _ in range(200)]
         bounces = self._count_bounces(brain, readings)
         assert bounces <= 2, f"Bounced {bounces} times with all batteries empty"
 
@@ -118,10 +116,18 @@ class TestNoRapidStateBouncing:
             oven_on = (tick % 30) < 15  # 15s on, 15s off
             load = 2200 if oven_on else 0
             p1 = -1500 + load  # 1500W solar surplus minus load
-            readings.append(_steady_reading(
-                p1=p1, solar=2000, zen_power=500, zen_soc=50,
-                pib1=200, pib2=200, pib1_soc=50, pib2_soc=50,
-            ))
+            readings.append(
+                _steady_reading(
+                    p1=p1,
+                    solar=2000,
+                    zen_power=500,
+                    zen_soc=50,
+                    pib1=200,
+                    pib2=200,
+                    pib1_soc=50,
+                    pib2_soc=50,
+                )
+            )
         bounces = self._count_bounces(brain, readings)
         assert bounces <= 5, f"Bounced {bounces} times during oven cycling"
 
@@ -131,21 +137,20 @@ class TestNoRapidStateBouncing:
         readings = []
         # Steady state discharge
         for _ in range(40):
-            readings.append(_steady_reading(p1=300, solar=0, zen_power=-300,
-                                            zen_soc=80))
+            readings.append(_steady_reading(p1=300, solar=0, zen_power=-300, zen_soc=80))
         # EV plugs in (big load)
         for _ in range(60):
-            readings.append(_steady_reading(p1=3500, solar=0, zen_power=-2400,
-                                            zen_soc=70, pib1=-800, pib2=-800,
-                                            pib1_soc=60, pib2_soc=60))
+            readings.append(
+                _steady_reading(
+                    p1=3500, solar=0, zen_power=-2400, zen_soc=70, pib1=-800, pib2=-800, pib1_soc=60, pib2_soc=60
+                )
+            )
         # EV unplugs
         for _ in range(60):
-            readings.append(_steady_reading(p1=-1800, solar=0, zen_power=-2400,
-                                            zen_soc=60))
+            readings.append(_steady_reading(p1=-1800, solar=0, zen_power=-2400, zen_soc=60))
         # Settle
         for _ in range(40):
-            readings.append(_steady_reading(p1=5, solar=0, zen_power=-300,
-                                            zen_soc=55))
+            readings.append(_steady_reading(p1=5, solar=0, zen_power=-300, zen_soc=55))
         bounces = self._count_bounces(brain, readings)
         assert bounces <= 5, f"Bounced {bounces} times during EV plug/unplug"
 
@@ -169,10 +174,14 @@ class TestChargeStepsUpWhenPIBsSaturated:
         for tick in range(30):
             d = brain.decide(
                 _steady_reading(
-                    p1=-850, solar=2500,
-                    zen_power=0, zen_soc=36,
-                    pib1=800, pib2=240,
-                    pib1_soc=84, pib2_soc=97,
+                    p1=-850,
+                    solar=2500,
+                    zen_power=0,
+                    zen_soc=36,
+                    pib1=800,
+                    pib2=240,
+                    pib1_soc=84,
+                    pib2_soc=97,
                 ),
                 t=tick,
             )
@@ -201,10 +210,14 @@ class TestDoesNotKillWorkingZendure:
         brain.last_send_time = 0
         d = brain.decide(
             _steady_reading(
-                p1=-591, solar=4754,
-                zen_power=2386, zen_soc=56,
-                pib1=60, pib2=60,
-                pib1_soc=80, pib2_soc=80,
+                p1=-591,
+                solar=4754,
+                zen_power=2386,
+                zen_soc=56,
+                pib1=60,
+                pib2=60,
+                pib1_soc=80,
+                pib2_soc=80,
             ),
             t=100,
         )
@@ -227,6 +240,7 @@ class TestDoesNotKillWorkingZendure:
         FLIP_S = 30s) while a saturated battery is asked to keep
         absorbing 800W+ of surplus."""
         from brains.permission_fsm import State
+
         brain = PermissionFSM()
         brain.state = State.CHARGE
         brain._zen_step_idx = 3  # 800W stepped baseline
@@ -236,9 +250,9 @@ class TestDoesNotKillWorkingZendure:
         # zen_soc just hit 100%. PIBs not all in taper (one at 50%) so we
         # stay in stepped mode → target = 800W → SOC clamp pins to 0.
         d = brain.decide(
-            _steady_reading(p1=-1500, solar=3000,
-                            zen_power=800, zen_soc=100,
-                            pib1=400, pib2=400, pib1_soc=50, pib2_soc=50),
+            _steady_reading(
+                p1=-1500, solar=3000, zen_power=800, zen_soc=100, pib1=400, pib2=400, pib1_soc=50, pib2_soc=50
+            ),
             t=10,
         )
         assert d.target == 0, f"Expected SOC clamp to pin target=0, got {d.target}"
@@ -255,6 +269,7 @@ class TestDoesNotKillWorkingZendure:
         clamp pins discharge target=0; the symmetric SLEEP-startup safety
         guard must not suppress that send when the battery is the reason."""
         from brains.permission_fsm import State
+
         brain = PermissionFSM()
         brain.state = State.SLEEP
         brain.last_sent_target = -800
@@ -264,8 +279,7 @@ class TestDoesNotKillWorkingZendure:
         # still considering whether to adopt DISCHARGE. last_zen_power is
         # negative (still discharging), p1 is positive (importing).
         d = brain.decide(
-            _steady_reading(p1=400, zen_power=-800, zen_soc=10,
-                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            _steady_reading(p1=400, zen_power=-800, zen_soc=10, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
             t=10,
         )
         assert d.target == 0
@@ -284,15 +298,12 @@ class TestDoesNotKillWorkingZendure:
         # Zen at 0W (idle), P1 importing — brain SHOULD send a stop.
         # We just verify the safety guard didn't fire here.
         d = brain.decide(
-            _steady_reading(p1=300, solar=0, zen_power=0, zen_soc=50,
-                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            _steady_reading(p1=300, solar=0, zen_power=0, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
             t=100,
         )
         # Either the brain transitions out of CHARGE or it stays and
         # safely commands standby — as long as we don't crash.
-        assert d.target <= 0, (
-            f"Unexpected target={d.target} when Zen is idle and importing"
-        )
+        assert d.target <= 0, f"Unexpected target={d.target} when Zen is idle and importing"
 
 
 class TestSunriseFlipWithoutSolarSensor:
@@ -309,14 +320,11 @@ class TestSunriseFlipWithoutSolarSensor:
         # Sustained P1 export, but solar entity reads 0 (not configured).
         for tick in range(int(PermissionFSM.FLIP_S) + 5):
             brain.decide(
-                _steady_reading(p1=-500, solar=0,
-                                zen_power=-500, zen_soc=70,
-                                pib1=0, pib2=0, pib1_soc=80, pib2_soc=80),
+                _steady_reading(p1=-500, solar=0, zen_power=-500, zen_soc=70, pib1=0, pib2=0, pib1_soc=80, pib2_soc=80),
                 t=tick,
             )
         assert brain.state.value == "CHARGE", (
-            "Brain stayed in DISCHARGE despite sustained -500W export — "
-            "sunrise flip should not require a solar entity."
+            "Brain stayed in DISCHARGE despite sustained -500W export — sunrise flip should not require a solar entity."
         )
 
     def test_pib_discharge_to_charge_flips_with_zero_solar(self):
@@ -324,10 +332,9 @@ class TestSunriseFlipWithoutSolarSensor:
         brain.state = brain.state.__class__("PIB_DISCHARGE")
         for tick in range(int(PermissionFSM.FLIP_S) + 5):
             brain.decide(
-                _steady_reading(p1=-500, solar=0,
-                                zen_power=0, zen_soc=10,
-                                pib1=-200, pib2=-200,
-                                pib1_soc=40, pib2_soc=40),
+                _steady_reading(
+                    p1=-500, solar=0, zen_power=0, zen_soc=10, pib1=-200, pib2=-200, pib1_soc=40, pib2_soc=40
+                ),
                 t=tick,
             )
         assert brain.state.value == "CHARGE"
@@ -346,14 +353,12 @@ class TestStandbyAtSaturation:
 
         for tick in range(int(PermissionFSM.FLIP_S) + 5):
             brain.decide(
-                _steady_reading(p1=0, solar=0, zen_power=0, zen_soc=99,
-                                pib1=0, pib2=0, pib1_soc=99, pib2_soc=99),
+                _steady_reading(p1=0, solar=0, zen_power=0, zen_soc=99, pib1=0, pib2=0, pib1_soc=99, pib2_soc=99),
                 t=tick,
             )
 
         assert brain.state.value == "SLEEP", (
-            f"Expected SLEEP but got {brain.state.value}. Near-full + idle "
-            "P1 should let PIBs standby."
+            f"Expected SLEEP but got {brain.state.value}. Near-full + idle P1 should let PIBs standby."
         )
 
     def test_full_sleep_wakes_to_discharge_on_demand(self):
@@ -375,8 +380,7 @@ class TestStandbyAtSaturation:
                 t=base + tick,
             )
         assert brain.state.value == "DISCHARGE", (
-            f"Expected DISCHARGE but got {brain.state.value}. SLEEP-from-full "
-            "should still wake on P1 demand."
+            f"Expected DISCHARGE but got {brain.state.value}. SLEEP-from-full should still wake on P1 demand."
         )
 
     def test_drain_sleep_wakes_to_charge_on_surplus(self):
@@ -387,21 +391,18 @@ class TestStandbyAtSaturation:
         # PIB_DISCHARGE→SLEEP now has a 3s exit holdoff; loop a few ticks.
         for tick in range(5):
             brain.decide(
-                _steady_reading(p1=0, zen_soc=10, pib1=0, pib2=0,
-                                pib1_soc=0, pib2_soc=0),
+                _steady_reading(p1=0, zen_soc=10, pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
                 t=tick,
             )
         assert brain.state.value == "SLEEP"
 
         for tick in range(int(PermissionFSM.WAKE_CHARGE_S) + 5):
             brain.decide(
-                _steady_reading(p1=-500, solar=2000, zen_soc=10,
-                                pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+                _steady_reading(p1=-500, solar=2000, zen_soc=10, pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
                 t=tick + 1,
             )
         assert brain.state.value == "CHARGE", (
-            f"Expected CHARGE but got {brain.state.value}. Drained SLEEP "
-            "must still wake on solar surplus."
+            f"Expected CHARGE but got {brain.state.value}. Drained SLEEP must still wake on solar surplus."
         )
 
 
@@ -419,8 +420,7 @@ class TestSleepEntryUsesStandby:
         transition_d = None
         for tick in range(5):
             d = brain.decide(
-                _steady_reading(p1=0, zen_power=0, zen_soc=10,
-                                pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+                _steady_reading(p1=0, zen_power=0, zen_soc=10, pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
                 t=tick,
             )
             if d.pib_mode is not None:
@@ -437,16 +437,12 @@ class TestSleepEntryUsesStandby:
         brain.state = brain.state.__class__("DISCHARGE")
 
         d = brain.decide(
-            _steady_reading(p1=0, zen_power=0, zen_soc=10,
-                            pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+            _steady_reading(p1=0, zen_power=0, zen_soc=10, pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
             t=0,
         )
 
         assert brain.state.value == "SLEEP"
-        assert d.pib_mode == "standby", (
-            f"Expected pib_mode='standby' on DISCHARGE→SLEEP, got "
-            f"{d.pib_mode!r}."
-        )
+        assert d.pib_mode == "standby", f"Expected pib_mode='standby' on DISCHARGE→SLEEP, got {d.pib_mode!r}."
 
 
 class TestPIBModeHeartbeat:
@@ -470,11 +466,9 @@ class TestPIBModeHeartbeat:
 
         # Between transition and heartbeat: no spurious sends.
         sends_before_heartbeat = 0
-        for tick in range(transition_t + 1,
-                          transition_t + int(PermissionFSM.PIB_HEARTBEAT_S) - 1):
+        for tick in range(transition_t + 1, transition_t + int(PermissionFSM.PIB_HEARTBEAT_S) - 1):
             d = brain.decide(
-                _steady_reading(p1=500, zen_power=-500, zen_soc=70,
-                                pib1_soc=70, pib2_soc=70),
+                _steady_reading(p1=500, zen_power=-500, zen_soc=70, pib1_soc=70, pib2_soc=70),
                 t=tick,
             )
             if d.pib_mode is not None:
@@ -486,13 +480,10 @@ class TestPIBModeHeartbeat:
 
         # Past heartbeat: re-asserts.
         d = brain.decide(
-            _steady_reading(p1=500, zen_power=-500, zen_soc=70,
-                            pib1_soc=70, pib2_soc=70),
+            _steady_reading(p1=500, zen_power=-500, zen_soc=70, pib1_soc=70, pib2_soc=70),
             t=transition_t + int(PermissionFSM.PIB_HEARTBEAT_S) + 1,
         )
-        assert d.pib_mode == "standby", (
-            f"Heartbeat should re-assert pib_mode=standby, got {d.pib_mode!r}"
-        )
+        assert d.pib_mode == "standby", f"Heartbeat should re-assert pib_mode=standby, got {d.pib_mode!r}"
 
     def test_no_spurious_send_at_startup(self):
         """Fresh brain in SLEEP with no transition fired → no pib_mode at all."""
@@ -521,9 +512,7 @@ class TestZenStandbyHeartbeat:
 
         # Past the 5s ramp-protection guard, brain sends target=0 once.
         d = brain.decide(
-            _steady_reading(p1=500, zen_power=0, zen_soc=10,
-                            pib1=-200, pib2=-200,
-                            pib1_soc=40, pib2_soc=40),
+            _steady_reading(p1=500, zen_power=0, zen_soc=10, pib1=-200, pib2=-200, pib1_soc=40, pib2_soc=40),
             t=10,
         )
         assert d.target == 0
@@ -533,20 +522,14 @@ class TestZenStandbyHeartbeat:
         # Between first send and heartbeat: silent.
         for tick in range(11, 39):
             d = brain.decide(
-                _steady_reading(p1=500, zen_power=0, zen_soc=10,
-                                pib1=-200, pib2=-200,
-                                pib1_soc=40, pib2_soc=40),
+                _steady_reading(p1=500, zen_power=0, zen_soc=10, pib1=-200, pib2=-200, pib1_soc=40, pib2_soc=40),
                 t=tick,
             )
-            assert d.send is False, (
-                f"Spurious send at t={tick} (only {tick-10}s elapsed since standby)"
-            )
+            assert d.send is False, f"Spurious send at t={tick} (only {tick - 10}s elapsed since standby)"
 
         # Past 30s: heartbeat re-asserts.
         d = brain.decide(
-            _steady_reading(p1=500, zen_power=0, zen_soc=10,
-                            pib1=-200, pib2=-200,
-                            pib1_soc=40, pib2_soc=40),
+            _steady_reading(p1=500, zen_power=0, zen_soc=10, pib1=-200, pib2=-200, pib1_soc=40, pib2_soc=40),
             t=42,
         )
         assert d.target == 0 and d.send is True, (
@@ -562,8 +545,7 @@ class TestZenStandbyHeartbeat:
                 t=tick,
             )
             assert d.send is False, (
-                f"Spurious send at t={tick} — brain has nothing to assert "
-                "(last_sent_target is None)."
+                f"Spurious send at t={tick} — brain has nothing to assert (last_sent_target is None)."
             )
 
 
@@ -582,16 +564,13 @@ class TestStartupDetection:
         transition_decision = None
         for tick in range(5):
             d = brain.decide(
-                _steady_reading(p1=400, zen_power=0, zen_soc=10,
-                                pib1=-400, pib2=-400,
-                                pib1_soc=40, pib2_soc=40),
+                _steady_reading(p1=400, zen_power=0, zen_soc=10, pib1=-400, pib2=-400, pib1_soc=40, pib2_soc=40),
                 t=tick,
             )
             if d.pib_mode is not None:
                 transition_decision = d
         assert brain.state.value == "PIB_DISCHARGE", (
-            f"Expected PIB_DISCHARGE on restart with drained Zen + active "
-            f"PIBs, got {brain.state.value}."
+            f"Expected PIB_DISCHARGE on restart with drained Zen + active PIBs, got {brain.state.value}."
         )
         assert transition_decision is not None, "Transition should have emitted pib_mode"
         assert transition_decision.pib_mode == "zero"
@@ -604,14 +583,12 @@ class TestStartupDetection:
         brain = PermissionFSM()
         # First tick suggests an in-progress charge (Zen at +2400W)…
         brain.decide(
-            _steady_reading(p1=-500, zen_power=2400, zen_soc=50,
-                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            _steady_reading(p1=-500, zen_power=2400, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
             t=0,
         )
         # …but next tick is back to idle (the first read was noise).
         brain.decide(
-            _steady_reading(p1=0, zen_power=0, zen_soc=50,
-                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            _steady_reading(p1=0, zen_power=0, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
             t=1,
         )
         assert brain.state.value == "SLEEP", (
@@ -631,14 +608,12 @@ class TestPIBDischargeExitsWhenEmpty:
 
         for tick in range(10):
             brain.decide(
-                _steady_reading(p1=300, pib1=0, pib2=0, zen_soc=10,
-                                pib1_soc=0, pib2_soc=0),
+                _steady_reading(p1=300, pib1=0, pib2=0, zen_soc=10, pib1_soc=0, pib2_soc=0),
                 t=tick,
             )
 
         assert brain.state.value == "SLEEP", (
-            f"Expected SLEEP but got {brain.state.value}. "
-            "PIBs at 0% producing 0W should exit PIB_DISCHARGE."
+            f"Expected SLEEP but got {brain.state.value}. PIBs at 0% producing 0W should exit PIB_DISCHARGE."
         )
 
     def test_settles_to_sleep_despite_pib_power_noise(self):
@@ -654,8 +629,7 @@ class TestPIBDischargeExitsWhenEmpty:
         powers = [0, 12, 0, 15, 0, 8, 0, 14, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         for tick, p in enumerate(powers):
             brain.decide(
-                _steady_reading(p1=300, pib1=p, pib2=0, zen_soc=10,
-                                pib1_soc=0, pib2_soc=0),
+                _steady_reading(p1=300, pib1=p, pib2=0, zen_soc=10, pib1_soc=0, pib2_soc=0),
                 t=tick,
             )
         # By tick 19, even if the noise dance prevented exit early on,
@@ -686,8 +660,7 @@ class TestNeverChargeFromGrid:
                     grid_charge_ticks += 1
 
             assert grid_charge_ticks <= 5, (
-                f"Seed {seed}: {grid_charge_ticks} ticks of grid charging "
-                f"(target > 100W with P1 > 100W and no solar)"
+                f"Seed {seed}: {grid_charge_ticks} ticks of grid charging (target > 100W with P1 > 100W and no solar)"
             )
 
 
@@ -710,8 +683,7 @@ class TestNeverDischargeToExport:
 
         # Target should have reduced significantly
         assert d.target > -200, (
-            f"Still discharging {d.target}W after 60s of -1000W P1. "
-            "Should have reduced to near-pilot."
+            f"Still discharging {d.target}W after 60s of -1000W P1. Should have reduced to near-pilot."
         )
 
 
@@ -736,9 +708,9 @@ class TestP1ContradictDebounce:
         # 7 ticks of PIBs idle, no contradicting P1 → pib_low_since=0
         for tick in range(7):
             brain.decide(
-                _steady_reading(p1=-50, solar=2000,
-                                zen_power=1200, zen_soc=50,
-                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                _steady_reading(
+                    p1=-50, solar=2000, zen_power=1200, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50
+                ),
                 t=tick,
             )
         assert brain._zen_step_idx == 4
@@ -749,9 +721,7 @@ class TestP1ContradictDebounce:
         # With 3s sustained debounce: contradiction not yet "real",
         # falls back to normal 15s holdoff which hasn't elapsed.
         brain.decide(
-            _steady_reading(p1=300, solar=2000,
-                            zen_power=1200, zen_soc=50,
-                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            _steady_reading(p1=300, solar=2000, zen_power=1200, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
             t=7,
         )
         assert brain._zen_step_idx == 4, (
@@ -770,22 +740,21 @@ class TestP1ContradictDebounce:
         # Establish low-PIB state without contradiction
         for tick in range(7):
             brain.decide(
-                _steady_reading(p1=-50, solar=2000,
-                                zen_power=1200, zen_soc=50,
-                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                _steady_reading(
+                    p1=-50, solar=2000, zen_power=1200, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50
+                ),
                 t=tick,
             )
         # Now sustain p1>+200 for >= 3s + STEP_HOLDOFF_FAST (5s)
         for tick in range(7, 7 + 8):
             brain.decide(
-                _steady_reading(p1=300, solar=2000,
-                                zen_power=1200, zen_soc=50,
-                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                _steady_reading(
+                    p1=300, solar=2000, zen_power=1200, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50
+                ),
                 t=tick,
             )
         assert brain._zen_step_idx < 4, (
-            f"Sustained contradiction should still allow fast step-down, "
-            f"but step is still {brain._zen_step_idx}."
+            f"Sustained contradiction should still allow fast step-down, but step is still {brain._zen_step_idx}."
         )
 
 
@@ -814,8 +783,7 @@ class TestPIBSendFailureRetry:
         # Next tick should re-emit pib_mode immediately, not wait for the
         # 5-minute heartbeat.
         d = brain.decide(
-            _steady_reading(p1=500, zen_power=-500, zen_soc=70,
-                            pib1_soc=70, pib2_soc=70),
+            _steady_reading(p1=500, zen_power=-500, zen_soc=70, pib1_soc=70, pib2_soc=70),
             t=transition_t + 1,
         )
         assert d.pib_mode == "standby", (
@@ -837,8 +805,7 @@ class TestPIBSendFailureRetry:
             if d.pib_mode == "standby":
                 transition_t = tick
         d = brain.decide(
-            _steady_reading(p1=500, zen_power=-500, zen_soc=70,
-                            pib1_soc=70, pib2_soc=70),
+            _steady_reading(p1=500, zen_power=-500, zen_soc=70, pib1_soc=70, pib2_soc=70),
             t=transition_t + 1,
         )
         assert d.pib_mode is None
@@ -853,8 +820,9 @@ class TestPIBCommandRate:
         commands = 0
         for tick in range(300):  # 5 minutes
             d = brain.decide(
-                _steady_reading(p1=-500, solar=2000, zen_power=1000, zen_soc=50,
-                                pib1=400, pib2=400, pib1_soc=50, pib2_soc=50),
+                _steady_reading(
+                    p1=-500, solar=2000, zen_power=1000, zen_soc=50, pib1=400, pib2=400, pib1_soc=50, pib2_soc=50
+                ),
                 t=tick,
             )
             if d.pib_mode is not None:
@@ -889,10 +857,9 @@ class TestChargeNomBoundaryRamp:
 
         # Drive a stepped tick first so the brain knows it was stepped.
         brain.decide(
-            _steady_reading(p1=-200, solar=2000,
-                            zen_power=800, zen_soc=50,
-                            pib1=400, pib2=400,
-                            pib1_soc=50, pib2_soc=50),
+            _steady_reading(
+                p1=-200, solar=2000, zen_power=800, zen_soc=50, pib1=400, pib2=400, pib1_soc=50, pib2_soc=50
+            ),
             t=0,
         )
 
@@ -901,10 +868,9 @@ class TestChargeNomBoundaryRamp:
         # The first NOM tick should clamp to current_step + 400 = 1200,
         # not jump to 2400.
         d = brain.decide(
-            _steady_reading(p1=-2000, solar=4000,
-                            zen_power=800, zen_soc=50,
-                            pib1=240, pib2=240,
-                            pib1_soc=97, pib2_soc=97),  # both in taper
+            _steady_reading(
+                p1=-2000, solar=4000, zen_power=800, zen_soc=50, pib1=240, pib2=240, pib1_soc=97, pib2_soc=97
+            ),  # both in taper
             t=1,
         )
         assert d.target <= 1200, (
@@ -922,27 +888,24 @@ class TestChargeNomBoundaryRamp:
 
         # Stepped tick
         brain.decide(
-            _steady_reading(p1=-200, solar=2000,
-                            zen_power=800, zen_soc=50,
-                            pib1=400, pib2=400,
-                            pib1_soc=50, pib2_soc=50),
+            _steady_reading(
+                p1=-200, solar=2000, zen_power=800, zen_soc=50, pib1=400, pib2=400, pib1_soc=50, pib2_soc=50
+            ),
             t=0,
         )
         # First NOM tick (clamped)
         brain.decide(
-            _steady_reading(p1=-2000, solar=4000,
-                            zen_power=800, zen_soc=50,
-                            pib1=240, pib2=240,
-                            pib1_soc=97, pib2_soc=97),
+            _steady_reading(
+                p1=-2000, solar=4000, zen_power=800, zen_soc=50, pib1=240, pib2=240, pib1_soc=97, pib2_soc=97
+            ),
             t=1,
         )
         # Subsequent NOM tick — full NOM applies. zen_power=1200, p1=-2000
         # → nom = 1200 - (-2000) = 3200 → clamped to max 2400.
         d = brain.decide(
-            _steady_reading(p1=-2000, solar=4000,
-                            zen_power=1200, zen_soc=50,
-                            pib1=240, pib2=240,
-                            pib1_soc=97, pib2_soc=97),
+            _steady_reading(
+                p1=-2000, solar=4000, zen_power=1200, zen_soc=50, pib1=240, pib2=240, pib1_soc=97, pib2_soc=97
+            ),
             t=2,
         )
         assert d.target == 2400
@@ -958,14 +921,14 @@ class TestP1Convergence:
         # Wake up and let PIBs saturate
         for tick in range(15):
             brain.decide(
-                _steady_reading(p1=-2000, solar=3000, zen_soc=20,
-                                pib1=800, pib2=800, pib1_soc=20, pib2_soc=20),
+                _steady_reading(p1=-2000, solar=3000, zen_soc=20, pib1=800, pib2=800, pib1_soc=20, pib2_soc=20),
                 t=tick,
             )
         # PIBs maxed, surplus still exporting — Zendure should charge
         d = brain.decide(
-            _steady_reading(p1=-2000, solar=3000, zen_power=0, zen_soc=20,
-                            pib1=800, pib2=800, pib1_soc=20, pib2_soc=20),
+            _steady_reading(
+                p1=-2000, solar=3000, zen_power=0, zen_soc=20, pib1=800, pib2=800, pib1_soc=20, pib2_soc=20
+            ),
             t=20,
         )
         assert d.target > 0, f"Should be charging with PIBs maxed and 2000W surplus, target={d.target}"
@@ -997,14 +960,14 @@ class TestTransitionTimersResetOnStateEntry:
 
     def test_wake_holdoff_does_not_carry_over_between_visits(self):
         from brains.permission_fsm import State
+
         brain = PermissionFSM()
 
         # Visit 1: arm SLEEP→CHARGE wake (WAKE_CHARGE_S=10s) for 5s of
         # sustained P1 export — half the holdoff, so it shouldn't fire.
         for tick in range(5):
             brain.decide(
-                _steady_reading(p1=-500, zen_power=0, zen_soc=50,
-                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                _steady_reading(p1=-500, zen_power=0, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
                 t=tick,
             )
         assert brain.state == State.SLEEP
@@ -1022,8 +985,7 @@ class TestTransitionTimersResetOnStateEntry:
         # fires at t=16. Without the reset: stale _since=0, fires at t=10.
         for tick in range(6, 12):
             brain.decide(
-                _steady_reading(p1=-500, zen_power=0, zen_soc=50,
-                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                _steady_reading(p1=-500, zen_power=0, zen_soc=50, pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
                 t=tick,
             )
         assert brain.state == State.SLEEP, (
@@ -1053,22 +1015,16 @@ class TestDischargeHelpOverDischargeHoldoff:
 
         # Tick 0: PIB slam-on transient — P1 briefly below -100.
         brain.decide(
-            _steady_reading(p1=-200, zen_power=-2400,
-                            pib1=-781, pib2=-803,
-                            pib1_soc=98, pib2_soc=94),
+            _steady_reading(p1=-200, zen_power=-2400, pib1=-781, pib2=-803, pib1_soc=98, pib2_soc=94),
             t=0,
         )
         # Tick 1-2: PIBs settling, P1 back above -100.
         brain.decide(
-            _steady_reading(p1=+50, zen_power=-2400,
-                            pib1=-500, pib2=-600,
-                            pib1_soc=98, pib2_soc=94),
+            _steady_reading(p1=+50, zen_power=-2400, pib1=-500, pib2=-600, pib1_soc=98, pib2_soc=94),
             t=1,
         )
         brain.decide(
-            _steady_reading(p1=+200, zen_power=-2400,
-                            pib1=-400, pib2=-450,
-                            pib1_soc=98, pib2_soc=94),
+            _steady_reading(p1=+200, zen_power=-2400, pib1=-400, pib2=-450, pib1_soc=98, pib2_soc=94),
             t=2,
         )
 
@@ -1087,9 +1043,7 @@ class TestDischargeHelpOverDischargeHoldoff:
         # 5 consecutive ticks of -300W — load really dropped.
         for tick in range(5):
             brain.decide(
-                _steady_reading(p1=-300, zen_power=-2400,
-                                pib1=-700, pib2=-700,
-                                pib1_soc=80, pib2_soc=80),
+                _steady_reading(p1=-300, zen_power=-2400, pib1=-700, pib2=-700, pib1_soc=80, pib2_soc=80),
                 t=tick,
             )
 

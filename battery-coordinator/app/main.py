@@ -34,8 +34,7 @@ log = logging.getLogger("coordinator")
 
 async def main():
     parser = argparse.ArgumentParser(description="Battery Coordinator")
-    parser.add_argument("--live", action="store_true",
-                        help="Force live mode (overrides DRY_RUN env / dry_run option)")
+    parser.add_argument("--live", action="store_true", help="Force live mode (overrides DRY_RUN env / dry_run option)")
     args = parser.parse_args()
 
     config = Config()
@@ -140,11 +139,7 @@ async def main():
             else:
                 pib_str = f"🔌 {p1.pib_power:>+5.0f}W ({p1.pib_count}x)"
 
-            tgt_s = (
-                f"charge {d.target}W" if d.target > 0
-                else f"discharge {abs(d.target)}W" if d.target < 0
-                else "hold"
-            )
+            tgt_s = f"charge {d.target}W" if d.target > 0 else f"discharge {abs(d.target)}W" if d.target < 0 else "hold"
             diff = d.target - zen.power
 
             # State transition → its own INFO line for easy grep.

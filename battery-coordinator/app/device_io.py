@@ -63,9 +63,7 @@ class ZendureDevice:
     async def read(self, session: aiohttp.ClientSession) -> ZendureStatus:
         """Read current device status. On failure return last-known."""
         try:
-            async with session.get(
-                f"{self._url}/properties/report", timeout=self._timeout
-            ) as r:
+            async with session.get(f"{self._url}/properties/report", timeout=self._timeout) as r:
                 if r.status != 200:
                     log.warning("Zendure read: HTTP %s from %s", r.status, self._url)
                     return self._last_status or _ZERO_STATUS
@@ -101,8 +99,7 @@ class ZendureDevice:
         self._last_status = status
         return status
 
-    async def fetch_sn(self, session: aiohttp.ClientSession,
-                       max_attempts: int = 60, delay_s: float = 5.0) -> str:
+    async def fetch_sn(self, session: aiohttp.ClientSession, max_attempts: int = 60, delay_s: float = 5.0) -> str:
         """Poll until the device reports a non-empty SN.
 
         After a host reboot the device may take 1–2 minutes to populate
@@ -257,14 +254,19 @@ class HWP1Meter:
                 if r.status != 200:
                     log.warning(
                         "HW P1 set_mode failed: HTTP %s (mode=%s perms=%s)",
-                        r.status, mode, permissions,
+                        r.status,
+                        mode,
+                        permissions,
                     )
                     return False
                 return True
         except Exception as e:
             log.warning(
                 "HW P1 set_mode failed (%s): %s (mode=%s perms=%s)",
-                type(e).__name__, e, mode, permissions,
+                type(e).__name__,
+                e,
+                mode,
+                permissions,
             )
             return False
 
@@ -279,8 +281,7 @@ class OptionalHASensor:
     brain treats as "missing/empty" and reaches a safe state).
     """
 
-    def __init__(self, ha_url: str, ha_token: str, entity_id: str,
-                 timeout: float = 3, max_stale_s: float = 60):
+    def __init__(self, ha_url: str, ha_token: str, entity_id: str, timeout: float = 3, max_stale_s: float = 60):
         self._url = f"{ha_url}/api/states/{entity_id}" if ha_url and entity_id else ""
         self._token = ha_token
         self._timeout = aiohttp.ClientTimeout(total=timeout)
@@ -315,15 +316,13 @@ class OptionalHASensor:
         # Read failed. Use last-known if it's still fresh; beyond the
         # stale window, return 0 so the brain can reach a safe state
         # rather than acting on a multi-minute-old SOC.
-        if (
-            self._last_value_t is not None
-            and (now - self._last_value_t) <= self._max_stale_s
-        ):
+        if self._last_value_t is not None and (now - self._last_value_t) <= self._max_stale_s:
             return self._last_value
         if self._last_value_t is not None:
             log.warning(
                 "HA sensor %s stale > %ss; returning 0",
-                self._url, self._max_stale_s,
+                self._url,
+                self._max_stale_s,
             )
             self._last_value_t = None  # log once until next success
         return 0.0
@@ -339,12 +338,10 @@ class DeviceIO:
         # Per-PIB SOC + power via HA. The brain handles arbitrary N PIBs;
         # one OptionalHASensor per configured entity, in order.
         self.pib_socs = [
-            OptionalHASensor(config.ha_url, config.ha_token, e, config.read_timeout)
-            for e in config.pib_soc_entities
+            OptionalHASensor(config.ha_url, config.ha_token, e, config.read_timeout) for e in config.pib_soc_entities
         ]
         self.pib_powers = [
-            OptionalHASensor(config.ha_url, config.ha_token, e, config.read_timeout)
-            for e in config.pib_power_entities
+            OptionalHASensor(config.ha_url, config.ha_token, e, config.read_timeout) for e in config.pib_power_entities
         ]
         if self.pib_powers and self.pib_socs and len(self.pib_powers) != len(self.pib_socs):
             # Config.validate() catches this and refuses to start; if we're
@@ -355,7 +352,8 @@ class DeviceIO:
                 "PIB power entities (%d) and SOC entities (%d) MUST be the "
                 "same length — brain pairs them by index, so mismatched "
                 "lists misalign PIBs to wrong SOCs.",
-                len(self.pib_powers), len(self.pib_socs),
+                len(self.pib_powers),
+                len(self.pib_socs),
             )
 
     async def read_all(self, session: aiohttp.ClientSession) -> tuple[Reading, ZendureStatus, P1Status]:
