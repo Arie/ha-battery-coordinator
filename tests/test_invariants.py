@@ -506,23 +506,50 @@ class TestStartupDetection:
     def test_sleep_to_pib_discharge_when_zen_drained_pibs_active(self):
         """Restart while Zen is drained and PIBs are providing the load —
         brain must adopt PIB_DISCHARGE, not SLEEP. Without this, the new
-        PIB heartbeat would force-standby PIBs that are covering demand."""
+        PIB heartbeat would force-standby PIBs that are covering demand.
+
+        Requires a few ticks of consistent agreement so a single noisy
+        first reading can't lock the brain into a wrong state."""
         brain = PermissionFSM()
-        d = brain.decide(
-            _steady_reading(p1=400, zen_power=0, zen_soc=10,
-                            pib1=-400, pib2=-400,
-                            pib1_soc=40, pib2_soc=40),
-            t=0,
-        )
+        transition_decision = None
+        for tick in range(5):
+            d = brain.decide(
+                _steady_reading(p1=400, zen_power=0, zen_soc=10,
+                                pib1=-400, pib2=-400,
+                                pib1_soc=40, pib2_soc=40),
+                t=tick,
+            )
+            if d.pib_mode is not None:
+                transition_decision = d
         assert brain.state.value == "PIB_DISCHARGE", (
             f"Expected PIB_DISCHARGE on restart with drained Zen + active "
             f"PIBs, got {brain.state.value}."
         )
-        assert d.pib_mode == "zero", (
-            f"Should adopt zero+discharge_allowed (PIBs already working), "
-            f"got pib_mode={d.pib_mode!r}"
+        assert transition_decision is not None, "Transition should have emitted pib_mode"
+        assert transition_decision.pib_mode == "zero"
+        assert transition_decision.pib_permissions == ["discharge_allowed"]
+
+    def test_single_noisy_reading_does_not_lock_state(self):
+        """A single transient first reading shouldn't bypass the holdoffs.
+        Sustained agreement is required before any startup-detection
+        transition fires."""
+        brain = PermissionFSM()
+        # First tick suggests an in-progress charge (Zen at +2400W)…
+        brain.decide(
+            _steady_reading(p1=-500, zen_power=2400, zen_soc=50,
+                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            t=0,
         )
-        assert d.pib_permissions == ["discharge_allowed"]
+        # …but next tick is back to idle (the first read was noise).
+        brain.decide(
+            _steady_reading(p1=0, zen_power=0, zen_soc=50,
+                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            t=1,
+        )
+        assert brain.state.value == "SLEEP", (
+            f"Brain locked into {brain.state.value} after a single noisy "
+            "reading. Startup guards should require sustained agreement."
+        )
 
 
 class TestPIBDischargeExitsWhenEmpty:

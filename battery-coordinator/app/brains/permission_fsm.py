@@ -219,18 +219,20 @@ class PermissionFSM:
         # First matching guard wins. Transitions own their holdoff timers.
         self._transitions: dict[State, list[tuple[Transition, callable]]] = {
             State.SLEEP: [
-                # Startup: detect hardware already active
-                (Transition(State.CHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["charge_allowed"]),
+                # Startup: detect hardware already active. 2s holdoff so a
+                # single noisy reading at process start can't bypass the
+                # WAKE_*_S guards below — sustained agreement only.
+                (Transition(State.CHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["charge_allowed"]),
                  lambda r, _: r.zen_power > PILOT_W),
-                (Transition(State.DISCHARGE, holdoff_s=0, pib_mode="standby"),
+                (Transition(State.DISCHARGE, holdoff_s=2, pib_mode="standby"),
                  lambda r, _: r.zen_power < -PILOT_W),
-                (Transition(State.CHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["charge_allowed"]),
+                (Transition(State.CHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["charge_allowed"]),
                  lambda r, _: sum(r.pibs) > self.PIB_CHARGE_DETECT and r.p1 < self.P1_EXPORT * 2),
-                (Transition(State.DISCHARGE, holdoff_s=0, pib_mode="standby"),
+                (Transition(State.DISCHARGE, holdoff_s=2, pib_mode="standby"),
                  lambda r, _: sum(r.pibs) < self.PIB_DISCHARGE_DETECT and abs(r.zen_power) <= PILOT_W and r.zen_soc > self.zen_soc_min),
                 # Restart while Zen drained + PIBs covering load → adopt
                 # PIB_DISCHARGE so the heartbeat doesn't force-stop them.
-                (Transition(State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]),
+                (Transition(State.PIB_DISCHARGE, holdoff_s=2, pib_mode="zero", pib_permissions=["discharge_allowed"]),
                  lambda r, _: sum(r.pibs) < self.PIB_DISCHARGE_DETECT and abs(r.zen_power) <= PILOT_W and r.zen_soc <= self.zen_soc_min),
                 # Normal wake
                 (Transition(State.CHARGE, holdoff_s=self.WAKE_CHARGE_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
@@ -486,15 +488,28 @@ class PermissionFSM:
         urgent = change > 500
 
         # Don't kill a Zendure that's already charging from genuine surplus.
-        # Stepped CHARGE mode starts at step 0 → target=0; if we've ever
-        # sent a non-zero command, the deadband says "send standby!" — but
-        # if Zen is at meaningful charge AND grid is exporting, the right
-        # action is to leave it alone and let the step-up logic catch up.
+        # Two cases:
+        #   - Stepped CHARGE mode starts at step 0 → target=0; the deadband
+        #     would say "send standby!" while Zen is still ramping up.
+        #   - During SLEEP startup-detection holdoff (2s), the brain hasn't
+        #     yet adopted CHARGE; sending standby in those 2s would kill a
+        #     Zen that's actively charging from surplus.
+        # In both cases: if Zen is meaningfully charging AND grid is
+        # exporting, leave it alone and let the FSM/step-up logic catch up.
         if (
             target == 0
-            and self.state == State.CHARGE
+            and self.state in (State.CHARGE, State.SLEEP)
             and self._last_zen_power > PILOT_W
             and self._last_p1 < self.P1_EXPORT
+        ):
+            return target, False, False
+        # Symmetric: don't kill a Zendure that's actively discharging into
+        # demand during the startup holdoff.
+        if (
+            target == 0
+            and self.state == State.SLEEP
+            and self._last_zen_power < -PILOT_W
+            and self._last_p1 > self.P1_IMPORT
         ):
             return target, False, False
 
