@@ -2,7 +2,7 @@
 
 Coordinates a **Zendure 2400 AC** battery alongside one or more **HomeWizard Plug-in Batteries** (PIBs) connected to a **HomeWizard P1 meter**, so they don't fight each other for the same surplus or load.
 
-It's a finite-state-machine controller that runs once per second, reads grid + battery state, and sends one Zendure command at a time. Production-tested with property-based invariant tests (260+) covering grid-charge prevention, oscillation, taper-zone behaviour, and fleet-wide coordination.
+It's a finite-state-machine controller that runs once per second, reads grid + battery state, and sends one Zendure command at a time. Production-tested with unit, property-based, and invariant tests covering grid-charge prevention, oscillation, taper-zone behaviour, and fleet-wide coordination.
 
 ## Before you install — prepare your hardware
 
@@ -107,7 +107,7 @@ battery-coordinator/      The HA add-on (config.yaml, Dockerfile, app/)
     device_io.py          Zendure + HW P1 + (optional) HA solar
     brains/permission_fsm.py   The FSM brain
 coordinator_cli.py        Legacy systemd CLI (HA REST, kept for handover scenarios)
-tests/                    260+ unit + property-based + invariant tests
+tests/                    Unit + property-based + invariant tests
 ```
 
 ## Development
