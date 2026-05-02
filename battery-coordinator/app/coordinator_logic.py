@@ -69,9 +69,6 @@ class Decision:
 
     target: int            # Zendure target power (W). +charge / -discharge / 0 standby
     zone: str              # FSM state name (SLEEP / CHARGE / DISCHARGE / ...)
-    hunting_dir: str       # "charging" / "discharging" / "idle"
-    pib_dir: str           # PIB-side direction observation
     send: bool             # whether to actually send the target to Zendure
-    urgent: bool           # send immediately (skip 5s ramp wait)
     pib_mode: str | None = None             # "standby", "zero", or None = no change
     pib_permissions: list[str] | None = None

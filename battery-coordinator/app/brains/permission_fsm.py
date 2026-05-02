@@ -453,9 +453,7 @@ class PermissionFSM:
         return 0
 
     def decide(self, r: Reading, t: float) -> Decision:
-        combined_pib = sum(r.pibs)
         pib_abs = sum(abs(p) for p in r.pibs)
-        pib_dir = "charging" if combined_pib > 50 else ("discharging" if combined_pib < -50 else "idle")
         self._last_zen_power = r.zen_power
         self._last_p1 = r.p1
         self._last_zen_soc = r.zen_soc
@@ -486,17 +484,12 @@ class PermissionFSM:
             target = 0
 
         # Send logic
-        target, send, urgent = self._should_send(target, t)
-
-        direction = "charging" if target > 0 else ("discharging" if target < 0 else "idle")
+        target, send, _urgent = self._should_send(target, t)
 
         return Decision(
             target=target,
             zone=self.state.value,
-            hunting_dir=direction,
-            pib_dir=pib_dir,
             send=send,
-            urgent=urgent,
             pib_mode=pib_mode,
             pib_permissions=pib_permissions,
         )
