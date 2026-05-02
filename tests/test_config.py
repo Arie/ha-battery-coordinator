@@ -222,7 +222,10 @@ class TestValidate:
         errors = c.validate()
         assert any("must have the same length" in e for e in errors), errors
 
-    def test_pib_lists_same_length_passes(self, clean_env, tmp_path):
+    def test_pib_lists_same_length_passes(self, clean_env, monkeypatch, tmp_path):
+        # Same-length PIB lists shouldn't add their own validation errors.
+        # Need SUPERVISOR_TOKEN since PIB entities trigger HA proxy mode.
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
         path = tmp_path / "options.json"
         path.write_text(json.dumps({
             "zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z",
