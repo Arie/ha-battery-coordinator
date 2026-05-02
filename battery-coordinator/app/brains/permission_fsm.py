@@ -315,15 +315,6 @@ class PermissionFSM:
                 break
         return self._zen_step_idx != old_idx
 
-    def _jump_to_step_at_least(self, target_w: int) -> None:
-        """Set step to the lowest step >= target_w (rounded up)."""
-        target_w = abs(target_w)
-        for i, step in enumerate(self.ZEN_STEPS):
-            if step >= target_w:
-                self._zen_step_idx = i
-                return
-        self._zen_step_idx = len(self.ZEN_STEPS) - 1
-
     def _update_step(self, pib_abs: float, t: float, p1: float = 0, pib_cap_now: float = 0) -> None:
         # PIBs saturated if absolute power exceeds fixed threshold OR they're
         # near their current capacity (which shrinks hard in taper zones).
