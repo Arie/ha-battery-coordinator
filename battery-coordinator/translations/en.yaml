@@ -14,7 +14,7 @@ configuration:
 
   pib_soc_entities:
     name: PIB state-of-charge entities
-    description: HA sensor entity IDs reporting each PIB's SOC (%). The HomeWizard P1 API doesn't expose SOC, so this must come from HA. Defaults to the names HA's HomeWizard integration creates. Up to 4 supported; SOCs are averaged before reaching the brain.
+    description: HA sensor entity IDs reporting each PIB's SOC (%). The HomeWizard P1 API doesn't expose SOC, so this must come from HA. Defaults to the names HA's HomeWizard integration creates. Up to 4 supported; each PIB is treated as a first-class unit by the brain (no averaging).
   pib_power_entities:
     name: PIB power entities
     description: HA sensor entity IDs reporting each PIB's power (W). Used to give the brain per-PIB power instead of the combined value from /api/batteries. Up to 4 supported.
