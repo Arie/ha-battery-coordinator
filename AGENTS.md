@@ -103,15 +103,30 @@ tests/
   test_packaging.py       pyproject / config.yaml / CHANGELOG version pin
 ```
 
-## Testing
+## Pre-commit gate
+
+`.github/workflows/ci.yml` runs these four checks on every push to
+`master` and every PR. **Run all four locally before each commit** —
+the CI will reject the same things, and a red build is more disruptive
+than a five-second local check.
 
 ```bash
-uv run python -m pytest tests/                       # All tests
-uv run ruff check battery-coordinator/app/ tests/    # Lint
-uv run ruff format --check battery-coordinator/app/ tests/  # Format check
-uv run ruff format battery-coordinator/app/ tests/   # Apply format
-uv run mypy                                          # Type check
+uv run ruff check battery-coordinator/app/ tests/           # Lint
+uv run ruff format --check battery-coordinator/app/ tests/  # Format
+uv run mypy                                                 # Types
+uv run python -m pytest tests/ -q                           # Tests
 ```
+
+If `ruff format --check` fails, fix it with `uv run ruff format
+battery-coordinator/app/ tests/`. The other three need real changes —
+don't bypass them with `--no-verify` or by disabling rules in
+`pyproject.toml` without justification (rule ignores there carry an
+explanatory comment for a reason).
+
+mypy is strict on `battery-coordinator/app/` (every public def
+annotated, no `Any` leaks, no bare generic `dict`/`list`). Tests are
+intentionally looser — bare `def test_foo():` is fine, but bodies are
+still type-checked, so a real bug like `None + int` will surface.
 
 ## Development workflow
 
@@ -119,11 +134,8 @@ uv run mypy                                          # Type check
 
 1. Add a test that captures the broken behavior; verify it fails.
 2. Fix the code.
-3. Run all tests: `uv run python -m pytest tests/`
-4. Run lint: `uv run ruff check battery-coordinator/app/ tests/`
-5. Run format check: `uv run ruff format --check battery-coordinator/app/ tests/` (or apply with `ruff format`)
-6. Run type check: `uv run mypy`
-7. Commit (one focused change per commit, imperative-mood subject).
+3. Run the four pre-commit gate checks above.
+4. Commit (one focused change per commit, imperative-mood subject).
 
 ## Constants reference
 
