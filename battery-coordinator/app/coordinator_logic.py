@@ -1,10 +1,4 @@
-"""Core types shared between the brain, device I/O, and tests.
-
-Only the production-relevant pieces live here. Older brain implementations
-(PibLeaderZenFollower, ZenLeader, PibHunter, ConsecutiveBatteries,
-PermissionBrain) used to share this module — they were experimental and
-have been removed; PermissionFSM is the only brain that ships now.
-"""
+"""Core types shared between the brain, device I/O, and tests."""
 
 from dataclasses import dataclass
 
