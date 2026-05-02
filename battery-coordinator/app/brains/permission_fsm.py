@@ -286,10 +286,14 @@ class PermissionFSM:
                 # Solar returns → charge
                 (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
                  lambda r, _: r.p1 < self.P1_EXPORT),
-                # PIBs empty → sleep with full standby. Sunrise wake goes
-                # through SLEEP→CHARGE (WAKE_CHARGE_S holdoff); a few
-                # seconds of leak-back trades for hours of standby savings.
-                (Transition(State.SLEEP, holdoff_s=0, pib_mode="standby"),
+                # PIBs empty → sleep with full standby. 3s holdoff so PIB
+                # power sensor noise (briefly reading 12W when it should be
+                # 0) doesn't keep us pinned out of SLEEP; we want sustained
+                # near-zero power before committing.
+                # Sunrise wake goes through SLEEP→CHARGE (WAKE_CHARGE_S
+                # holdoff); a few seconds of leak-back trades for hours of
+                # standby savings.
+                (Transition(State.SLEEP, holdoff_s=3, pib_mode="standby"),
                  lambda r, _: all(abs(p) < 10 for p in r.pibs) and all(s <= 1 for s in r.pib_socs)),
             ],
         }

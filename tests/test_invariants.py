@@ -573,6 +573,30 @@ class TestPIBDischargeExitsWhenEmpty:
             "PIBs at 0% producing 0W should exit PIB_DISCHARGE."
         )
 
+    def test_settles_to_sleep_despite_pib_power_noise(self):
+        """PIB power sensor noise — readings bouncing 0/15/0/12 — used to
+        keep PIB_DISCHARGE pinned because the guard required all
+        |p|<10 every tick. With holdoff hysteresis, transient noise
+        within a holdoff window doesn't reset the timer — brain reaches
+        SLEEP after sustained near-zero power."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("PIB_DISCHARGE")
+
+        # 20 ticks with SOC at 0 and power oscillating in noise band.
+        powers = [0, 12, 0, 15, 0, 8, 0, 14, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        for tick, p in enumerate(powers):
+            brain.decide(
+                _steady_reading(p1=300, pib1=p, pib2=0, zen_soc=10,
+                                pib1_soc=0, pib2_soc=0),
+                t=tick,
+            )
+        # By tick 19, even if the noise dance prevented exit early on,
+        # the long tail of zeros should let the brain reach SLEEP.
+        assert brain.state.value == "SLEEP", (
+            f"Brain stuck in {brain.state.value} after 20 ticks at 0% "
+            "SOC. Sensor noise on PIB power shouldn't prevent SLEEP."
+        )
+
 
 class TestNeverChargeFromGrid:
     """Brain should never charge batteries from the grid (positive Zendure
