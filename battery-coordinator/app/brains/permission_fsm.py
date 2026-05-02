@@ -120,6 +120,13 @@ class PermissionFSM:
     P1_IMPORT = DEFAULTS["p1_import_w"]
     P1_OVER_DISCHARGE = -100  # P1 below this in DISCHARGE_HELP = load dropped
 
+    # Combined-PIB-power thresholds for startup detection. Independent from
+    # P1_EXPORT so tuning the export threshold doesn't accidentally also
+    # change PIB direction detection — they're different signals (grid-side
+    # vs battery-side) that happened to share a magnitude.
+    PIB_CHARGE_DETECT = 100      # combined PIB > this on startup → adopt CHARGE
+    PIB_DISCHARGE_DETECT = -100  # combined PIB < this on startup → adopt DISCHARGE
+
     # Zendure capacity thresholds
     ZEN_MAXED_FRAC = 0.95   # Zendure above this fraction of max → considered maxed
     ZEN_HELP_EXIT_FRAC = 0.8  # total discharge below this fraction → PIBs redundant
@@ -218,13 +225,13 @@ class PermissionFSM:
                 (Transition(State.DISCHARGE, holdoff_s=0, pib_mode="standby"),
                  lambda r, _: r.zen_power < -PILOT_W),
                 (Transition(State.CHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["charge_allowed"]),
-                 lambda r, _: sum(r.pibs) > abs(self.P1_EXPORT) and r.p1 < self.P1_EXPORT * 2),
+                 lambda r, _: sum(r.pibs) > self.PIB_CHARGE_DETECT and r.p1 < self.P1_EXPORT * 2),
                 (Transition(State.DISCHARGE, holdoff_s=0, pib_mode="standby"),
-                 lambda r, _: sum(r.pibs) < self.P1_EXPORT and abs(r.zen_power) <= PILOT_W and r.zen_soc > self.zen_soc_min),
+                 lambda r, _: sum(r.pibs) < self.PIB_DISCHARGE_DETECT and abs(r.zen_power) <= PILOT_W and r.zen_soc > self.zen_soc_min),
                 # Restart while Zen drained + PIBs covering load → adopt
                 # PIB_DISCHARGE so the heartbeat doesn't force-stop them.
                 (Transition(State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]),
-                 lambda r, _: sum(r.pibs) < self.P1_EXPORT and abs(r.zen_power) <= PILOT_W and r.zen_soc <= self.zen_soc_min),
+                 lambda r, _: sum(r.pibs) < self.PIB_DISCHARGE_DETECT and abs(r.zen_power) <= PILOT_W and r.zen_soc <= self.zen_soc_min),
                 # Normal wake
                 (Transition(State.CHARGE, holdoff_s=self.WAKE_CHARGE_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
                  lambda r, _: r.p1 < self.P1_EXPORT and (r.zen_soc < self.zen_soc_max - 1 or _total_charge_cap(r) > 200)),

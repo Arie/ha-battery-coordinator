@@ -86,6 +86,26 @@ class TestOverrides:
         assert 99 in wake_holdoffs
 
 
+class TestP1ExportSemanticIsolated:
+    """p1_export_w controls grid-export detection only. PIB-discharge
+    detection (used in startup guards) lives on a separate constant so
+    tuning the export threshold doesn't accidentally retune the PIB
+    direction-detection threshold."""
+
+    def test_overriding_p1_export_does_not_change_pib_discharge_detect(self):
+        a = PermissionFSM()
+        b = PermissionFSM(p1_export_w=-300)
+        assert a.PIB_DISCHARGE_DETECT == b.PIB_DISCHARGE_DETECT, (
+            "Tuning p1_export_w changed PIB_DISCHARGE_DETECT. The two have "
+            "different meanings (grid-side vs battery-side) and should not "
+            "be coupled by accident."
+        )
+
+    def test_p1_export_override_takes_effect(self):
+        b = PermissionFSM(p1_export_w=-300)
+        assert b.P1_EXPORT == -300
+
+
 class TestMarkSent:
     """mark_sent() owns last_ac_mode bookkeeping; callers shouldn't have to
     reset it manually."""
