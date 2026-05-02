@@ -136,6 +136,16 @@ class Config:
             errors.append("ha_token is required when ha_url is set")
         if self.zen_soc_min >= self.zen_soc_max:
             errors.append("zen_soc_min must be less than zen_soc_max")
+        if (
+            self.pib_soc_entities
+            and self.pib_power_entities
+            and len(self.pib_soc_entities) != len(self.pib_power_entities)
+        ):
+            errors.append(
+                f"pib_soc_entities ({len(self.pib_soc_entities)}) and "
+                f"pib_power_entities ({len(self.pib_power_entities)}) must "
+                f"have the same length — the brain pairs them by index"
+            )
         return errors
 
     def brain_kwargs(self) -> dict:

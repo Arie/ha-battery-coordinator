@@ -316,9 +316,14 @@ class DeviceIO:
             for e in config.pib_power_entities
         ]
         if self.pib_powers and self.pib_socs and len(self.pib_powers) != len(self.pib_socs):
-            log.warning(
-                "PIB power entities (%d) and SOC entities (%d) have different counts. "
-                "Brain pairs them by index, so mismatched lists may misalign PIBs.",
+            # Config.validate() catches this and refuses to start; if we're
+            # here something bypassed validation. Log an error so it's at
+            # least visible — silently padding makes the brain see ghost
+            # 0%-SOC PIBs and over-correct.
+            log.error(
+                "PIB power entities (%d) and SOC entities (%d) MUST be the "
+                "same length — brain pairs them by index, so mismatched "
+                "lists misalign PIBs to wrong SOCs.",
                 len(self.pib_powers), len(self.pib_socs),
             )
 

@@ -210,3 +210,24 @@ class TestValidate:
         monkeypatch.setenv("ZEN_SOC_MAX", "60")
         c = Config(options_path=_missing_options_path(tmp_path))
         assert "zen_soc_min must be less than zen_soc_max" in c.validate()
+
+    def test_pib_lists_must_have_same_length(self, clean_env, tmp_path):
+        path = tmp_path / "options.json"
+        path.write_text(json.dumps({
+            "zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z",
+            "pib_soc_entities": ["sensor.a", "sensor.b"],
+            "pib_power_entities": ["sensor.p"],
+        }))
+        c = Config(options_path=str(path))
+        errors = c.validate()
+        assert any("must have the same length" in e for e in errors), errors
+
+    def test_pib_lists_same_length_passes(self, clean_env, tmp_path):
+        path = tmp_path / "options.json"
+        path.write_text(json.dumps({
+            "zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z",
+            "pib_soc_entities": ["sensor.a", "sensor.b"],
+            "pib_power_entities": ["sensor.p", "sensor.q"],
+        }))
+        c = Config(options_path=str(path))
+        assert c.validate() == []
