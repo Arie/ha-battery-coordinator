@@ -19,14 +19,6 @@ def pib_max_charge(soc: float) -> int:
     return taper.get(int(soc), 120)
 
 
-def pib_max_discharge(soc: float) -> int:
-    """Max discharge power at given SOC, based on real taper data."""
-    if soc > 11:
-        return 800
-    taper = {11: 660, 10: 600, 9: 540, 8: 480, 7: 420, 6: 360, 5: 300, 4: 240, 3: 180, 2: 120, 1: 120, 0: 120}
-    return taper.get(int(soc), 120)
-
-
 class Reading:
     """Snapshot of all sensor readings.
 
