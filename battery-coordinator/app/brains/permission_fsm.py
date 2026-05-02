@@ -1,7 +1,8 @@
 """PermissionFSM: FSM-based brain using PIB permissions to prevent lockout.
 
-Same behavior as PermissionBrain, but transitions are defined as data
-in a transition table instead of scattered if/elif blocks.
+State transitions are defined as data in a transition table instead of
+scattered if/elif blocks; each Transition owns its own holdoff timer
+and entry-action (pib_mode + pib_permissions).
 """
 
 from dataclasses import dataclass, field
@@ -285,7 +286,7 @@ class PermissionFSM:
             ],
         }
 
-    # --- Step logic (same as PermissionBrain) ---
+    # --- Step logic ---
 
     def _current_step(self) -> int:
         return self.ZEN_STEPS[self._zen_step_idx]
