@@ -21,6 +21,25 @@ ADDON_OPTIONS_PATH = "/data/options.json"
 def _split_csv(s: str) -> list[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 
+
+def _safe_int(value, *, field: str, default: int) -> int:
+    """Parse an int, returning default with a clear error if the value
+    is malformed. Used in both options-file and env-var paths so a typo
+    in user config produces a useful message via validate() instead of
+    a TypeError at startup."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise _ConfigParseError(f"{field}: cannot parse {value!r} as int")
+
+
+class _ConfigParseError(ValueError):
+    """Internal error raised by _safe_int / _safe_float and caught by Config
+    so validate() can surface a coherent list of problems instead of crashing
+    on the first bad field."""
+
 # Defaults for brain tuning — production-tested in PermissionFSM.
 _BRAIN_DEFAULTS = {
     "step_holdoff_s": 15,
@@ -43,11 +62,40 @@ class Config:
     """Battery coordinator configuration."""
 
     def __init__(self, options_path: str = ADDON_OPTIONS_PATH):
-        if Path(options_path).is_file():
-            with open(options_path) as f:
-                self._load_from_options(json.load(f))
-        else:
-            self._load_from_env()
+        # Errors collected during parsing — surfaced through validate()
+        # instead of raising, so the caller can list every problem at once.
+        self._parse_errors: list[str] = []
+        # Pre-set every attribute the rest of the code reads, so a parse
+        # error halfway through a load path doesn't leave validate() with
+        # missing attrs.
+        self._set_defaults()
+        try:
+            if Path(options_path).is_file():
+                with open(options_path) as f:
+                    self._load_from_options(json.load(f))
+            else:
+                self._load_from_env()
+        except _ConfigParseError as e:
+            self._parse_errors.append(str(e))
+
+    def _set_defaults(self) -> None:
+        self.zendure_ip = ""
+        self.hw_p1_ip = ""
+        self.hw_p1_token = ""
+        self.ha_url = ""
+        self.ha_token = ""
+        self.solar_entity = ""
+        self.pib_soc_entities: list[str] = []
+        self.pib_power_entities: list[str] = []
+        self.zen_max_charge_w = 2400
+        self.zen_max_discharge_w = 2400
+        self.zen_soc_min = 10
+        self.zen_soc_max = 100
+        self.brain = dict(_BRAIN_DEFAULTS)
+        self.read_timeout = 3.0
+        self.write_timeout = 5.0
+        self.log_level = "INFO"
+        self.dry_run = False
 
     # --- Path 1: HA add-on (Supervisor-managed) ---
 
@@ -72,13 +120,13 @@ class Config:
             self.ha_url = ""
             self.ha_token = ""
 
-        self.zen_max_charge_w = int(o.get("zen_max_charge_w", 2400))
-        self.zen_max_discharge_w = int(o.get("zen_max_discharge_w", 2400))
-        self.zen_soc_min = int(o.get("zen_soc_min", 10))
-        self.zen_soc_max = int(o.get("zen_soc_max", 100))
+        self.zen_max_charge_w = _safe_int(o.get("zen_max_charge_w"), field="zen_max_charge_w", default=2400)
+        self.zen_max_discharge_w = _safe_int(o.get("zen_max_discharge_w"), field="zen_max_discharge_w", default=2400)
+        self.zen_soc_min = _safe_int(o.get("zen_soc_min"), field="zen_soc_min", default=10)
+        self.zen_soc_max = _safe_int(o.get("zen_soc_max"), field="zen_soc_max", default=100)
 
         self.brain = {
-            key: int(o.get(f"brain_{key}", default))
+            key: _safe_int(o.get(f"brain_{key}"), field=f"brain_{key}", default=default)
             for key, default in _BRAIN_DEFAULTS.items()
         }
 
@@ -95,21 +143,22 @@ class Config:
         self.hw_p1_ip = os.getenv("HW_P1_IP", "")
         self.hw_p1_token = os.getenv("HW_P1_TOKEN", "")
 
-        self.ha_url = os.getenv("HA_URL", "")
-        self.ha_token = os.getenv("HA_TOKEN", "")
         self.solar_entity = os.getenv("SOLAR_ENTITY", "")
         # Comma-separated env vars in standalone mode, e.g.
         # PIB_SOC_ENTITIES="sensor.pib_soc,sensor.pib_soc_2"
         self.pib_soc_entities = _split_csv(os.getenv("PIB_SOC_ENTITIES", ""))[:4]
         self.pib_power_entities = _split_csv(os.getenv("PIB_POWER_ENTITIES", ""))[:4]
 
-        self.zen_max_charge_w = int(os.getenv("ZEN_MAX_CHARGE_W", "2400"))
-        self.zen_max_discharge_w = int(os.getenv("ZEN_MAX_DISCHARGE_W", "2400"))
-        self.zen_soc_min = int(os.getenv("ZEN_SOC_MIN", "10"))
-        self.zen_soc_max = int(os.getenv("ZEN_SOC_MAX", "100"))
+        self.ha_url = os.getenv("HA_URL", "")
+        self.ha_token = os.getenv("HA_TOKEN", "")
+
+        self.zen_max_charge_w = _safe_int(os.getenv("ZEN_MAX_CHARGE_W"), field="ZEN_MAX_CHARGE_W", default=2400)
+        self.zen_max_discharge_w = _safe_int(os.getenv("ZEN_MAX_DISCHARGE_W"), field="ZEN_MAX_DISCHARGE_W", default=2400)
+        self.zen_soc_min = _safe_int(os.getenv("ZEN_SOC_MIN"), field="ZEN_SOC_MIN", default=10)
+        self.zen_soc_max = _safe_int(os.getenv("ZEN_SOC_MAX"), field="ZEN_SOC_MAX", default=100)
 
         self.brain = {
-            key: int(os.getenv(f"BRAIN_{key.upper()}", str(default)))
+            key: _safe_int(os.getenv(f"BRAIN_{key.upper()}"), field=f"BRAIN_{key.upper()}", default=default)
             for key, default in _BRAIN_DEFAULTS.items()
         }
 
@@ -123,19 +172,33 @@ class Config:
 
     def validate(self) -> list[str]:
         """Return list of validation errors, empty if config is valid."""
-        errors = []
+        errors = list(self._parse_errors)
         if not self.zendure_ip:
             errors.append("zendure_ip is required")
         if not self.hw_p1_ip:
             errors.append("hw_p1_ip is required")
         if not self.hw_p1_token:
             errors.append("hw_p1_token is required")
-        if self.solar_entity and not self.ha_url:
-            errors.append("ha_url is required when solar_entity is set")
+        # Any HA-backed entity needs the HA proxy. Same check for solar,
+        # pib_soc, and pib_power so a user setting one without the others
+        # still gets a clear error.
+        needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities)
+        if needs_ha and not self.ha_url:
+            errors.append("ha_url is required when solar_entity or pib_*_entities are set")
         if self.ha_url and not self.ha_token:
             errors.append("ha_token is required when ha_url is set")
         if self.zen_soc_min >= self.zen_soc_max:
             errors.append("zen_soc_min must be less than zen_soc_max")
+        # Bounds. The addon's config.yaml schema enforces these; the
+        # env-var path bypasses the schema, so duplicate the check here.
+        if self.zen_max_charge_w <= 0:
+            errors.append(f"zen_max_charge_w must be > 0 (got {self.zen_max_charge_w})")
+        if self.zen_max_discharge_w <= 0:
+            errors.append(f"zen_max_discharge_w must be > 0 (got {self.zen_max_discharge_w})")
+        if not (0 <= self.zen_soc_min <= 100):
+            errors.append(f"zen_soc_min must be 0–100 (got {self.zen_soc_min})")
+        if not (0 <= self.zen_soc_max <= 100):
+            errors.append(f"zen_soc_max must be 0–100 (got {self.zen_soc_max})")
         if (
             self.pib_soc_entities
             and self.pib_power_entities

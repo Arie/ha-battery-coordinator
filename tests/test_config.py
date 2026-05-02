@@ -200,7 +200,8 @@ class TestValidate:
         monkeypatch.setenv("HW_P1_TOKEN", "z")
         monkeypatch.setenv("SOLAR_ENTITY", "sensor.solar")
         c = Config(options_path=_missing_options_path(tmp_path))
-        assert "ha_url is required when solar_entity is set" in c.validate()
+        errors = c.validate()
+        assert any("ha_url is required" in e for e in errors), errors
 
     def test_soc_min_must_be_less_than_max(self, clean_env, monkeypatch, tmp_path):
         monkeypatch.setenv("ZENDURE_IP", "x")
@@ -221,6 +222,37 @@ class TestValidate:
         c = Config(options_path=str(path))
         errors = c.validate()
         assert any("must have the same length" in e for e in errors), errors
+
+    def test_malformed_int_surfaces_through_validate(self, clean_env, monkeypatch, tmp_path):
+        # A user typo in env-var mode shouldn't crash startup with a
+        # ValueError — it should produce a clear validation error.
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        monkeypatch.setenv("ZEN_MAX_CHARGE_W", "not-a-number")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        errors = c.validate()
+        assert any("ZEN_MAX_CHARGE_W" in e for e in errors), errors
+
+    def test_negative_zen_max_charge_w_rejected(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        monkeypatch.setenv("ZEN_MAX_CHARGE_W", "-100")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        errors = c.validate()
+        assert any("zen_max_charge_w must be > 0" in e for e in errors), errors
+
+    def test_pib_entities_via_env_require_ha_url(self, clean_env, monkeypatch, tmp_path):
+        # Setting PIB_SOC_ENTITIES without HA_URL is a misconfiguration —
+        # those reads silently return 0 forever. validate() should catch it.
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        monkeypatch.setenv("PIB_SOC_ENTITIES", "sensor.a")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        errors = c.validate()
+        assert any("ha_url is required" in e for e in errors), errors
 
     def test_pib_lists_same_length_passes(self, clean_env, monkeypatch, tmp_path):
         # Same-length PIB lists shouldn't add their own validation errors.
