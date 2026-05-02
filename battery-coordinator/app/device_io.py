@@ -4,6 +4,7 @@ Talks to Zendure (local REST) and HomeWizard P1 meter (local HTTPS) directly.
 Optional HA connection for solar sensor only.
 """
 
+import asyncio
 import logging
 import ssl
 from dataclasses import dataclass
@@ -277,14 +278,25 @@ class DeviceIO:
             )
 
     async def read_all(self, session: aiohttp.ClientSession) -> tuple[Reading, ZendureStatus, P1Status]:
-        """Read all devices and return a Reading for the brain."""
-        zen = await self.zendure.read(session)
-        p1 = await self.p1.read(session)
-        solar = await self.solar.read(session)
+        """Read all devices and return a Reading for the brain.
 
-        # Per-PIB SOC + power from HA, one entry per configured PIB.
-        pib_socs = [await s.read(session) for s in self.pib_socs]
-        pib_powers = [await p.read(session) for p in self.pib_powers]
+        All reads run concurrently. With 4 PIBs × 2 entities + Zen + P1
+        + solar that's up to ~10 HTTPS requests per tick — sequential
+        would easily blow past the 1Hz tick budget on a slow HA host.
+        """
+        results = await asyncio.gather(
+            self.zendure.read(session),
+            self.p1.read(session),
+            self.solar.read(session),
+            *(s.read(session) for s in self.pib_socs),
+            *(p.read(session) for p in self.pib_powers),
+        )
+        zen = results[0]
+        p1 = results[1]
+        solar = results[2]
+        pib_soc_end = 3 + len(self.pib_socs)
+        pib_socs = list(results[3:pib_soc_end])
+        pib_powers = list(results[pib_soc_end:])
 
         # Fallback when no per-PIB power entities are configured: split the
         # combined value from /api/batteries evenly across PIBs. Rough but
