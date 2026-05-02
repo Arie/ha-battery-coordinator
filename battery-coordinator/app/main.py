@@ -5,9 +5,9 @@ Talks directly to Zendure (local REST) and HomeWizard P1 meter (local HTTPS).
 No Home Assistant dependency. Optional HA connection for solar sensor only.
 
 Usage:
-  python main.py              # dry run (observe only)
-  python main.py --live       # control devices
-  DRY_RUN=true python main.py # dry run via env var
+  python main.py              # live mode (default — controls devices)
+  python main.py --live       # force live mode regardless of config
+  DRY_RUN=true python main.py # observe-only via env var
 """
 
 import argparse
@@ -34,7 +34,8 @@ log = logging.getLogger("coordinator")
 
 async def main():
     parser = argparse.ArgumentParser(description="Battery Coordinator")
-    parser.add_argument("--live", action="store_true", help="Control devices (default: dry run)")
+    parser.add_argument("--live", action="store_true",
+                        help="Force live mode (overrides DRY_RUN env / dry_run option)")
     args = parser.parse_args()
 
     config = Config()
@@ -67,7 +68,10 @@ async def main():
         zen_sn = await io.zendure.fetch_sn(session)
         log.info(f"Zendure SN: {zen_sn or '<not yet available>'}")
         if not zen_sn and not config.dry_run:
-            log.warning("Zendure SN never appeared — running in observe-only mode")
+            # Writes will fail with an empty SN. read() keeps polling and
+            # caches the SN whenever it shows up, so writes self-heal once
+            # the device populates it.
+            log.warning("Zendure SN never appeared — writes will fail until it does")
 
         prev_state = None
         prev_target: int | None = None
