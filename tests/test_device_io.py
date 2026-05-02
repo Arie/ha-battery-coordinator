@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
-from device_io import OptionalHASensor, ZendureDevice
+from device_io import HWP1Meter, OptionalHASensor, ZendureDevice
 
 
 class _FakeResponse:
@@ -240,6 +240,128 @@ class TestZendureStandbyFlashWear:
         )
         assert props["outputLimit"] == 0
         assert props["inputLimit"] == 0
+
+
+class _FakeMultiURLSession:
+    """Routes get() calls by URL substring to a scripted response queue.
+
+    HWP1Meter hits two endpoints (/api/measurement and /api/batteries) per
+    read, so a flat queue would couple ordering to the implementation.
+    Keying by URL keeps the tests readable and order-independent.
+    """
+
+    def __init__(self, scripts: dict[str, list[dict]]):
+        self._scripts = {k: list(v) for k, v in scripts.items()}
+
+    def get(self, url, headers=None, timeout=None, ssl=None):
+        for key, queue in self._scripts.items():
+            if key in url:
+                if not queue:
+                    return _FakeResponse(status=200, payload={})
+                return _FakeResponse(**queue.pop(0))
+        return _FakeResponse(status=404, payload={})
+
+
+_GOOD_MEASUREMENT = {"power_w": 850.0}
+_GOOD_BATTERIES = {
+    "power_w": 600.0,
+    "mode": "zero",
+    "permissions": ["charge_allowed"],
+    "battery_count": 2,
+}
+
+
+class TestHWP1ReadResilience:
+    """Same contract as ZendureDevice: a transient read failure must not
+    erase what we knew. The brain treats every Reading as ground truth,
+    and P1Status drives p1.grid_power into the Reading. Zeroing on a blip
+    propagates a false 'grid balanced' signal that resets transition
+    holdoff timers and (with bad-status responses) hides auth failures.
+    """
+
+    @pytest.mark.asyncio
+    async def test_measurement_failure_returns_last_known_grid_power(self):
+        meter = HWP1Meter("1.2.3.4", "tok")
+        session = _FakeMultiURLSession({
+            "/api/measurement": [
+                {"status": 200, "payload": _GOOD_MEASUREMENT},
+                {"raise_on_get": ConnectionError("blip")},
+            ],
+            "/api/batteries": [
+                {"status": 200, "payload": _GOOD_BATTERIES},
+                {"status": 200, "payload": _GOOD_BATTERIES},
+            ],
+        })
+        first = await meter.read(session)
+        assert first.grid_power == 850.0
+
+        second = await meter.read(session)
+        assert second.grid_power == 850.0, (
+            "Network blip on /api/measurement returned 0 instead of "
+            "last-known 850W. The brain reads this as 'grid balanced' and "
+            "resets all P1-driven transition holdoffs on every blip."
+        )
+
+    @pytest.mark.asyncio
+    async def test_batteries_failure_returns_last_known_pib_state(self):
+        meter = HWP1Meter("1.2.3.4", "tok")
+        session = _FakeMultiURLSession({
+            "/api/measurement": [
+                {"status": 200, "payload": _GOOD_MEASUREMENT},
+                {"status": 200, "payload": _GOOD_MEASUREMENT},
+            ],
+            "/api/batteries": [
+                {"status": 200, "payload": _GOOD_BATTERIES},
+                {"raise_on_get": TimeoutError()},
+            ],
+        })
+        first = await meter.read(session)
+        assert first.pib_power == 600.0
+        assert first.pib_count == 2
+        assert first.pib_mode == "zero"
+
+        second = await meter.read(session)
+        assert second.pib_power == 600.0
+        assert second.pib_count == 2
+        assert second.pib_mode == "zero"
+        assert second.pib_permissions == ["charge_allowed"]
+
+    @pytest.mark.asyncio
+    async def test_non_200_status_uses_last_known(self):
+        # 401 (bad token) or 500 with a JSON body would currently silently
+        # return 0 from data.get("power_w", 0). Status check + last-known
+        # should suppress that.
+        meter = HWP1Meter("1.2.3.4", "tok")
+        session = _FakeMultiURLSession({
+            "/api/measurement": [
+                {"status": 200, "payload": _GOOD_MEASUREMENT},
+                {"status": 401, "payload": {"error": "unauthorized"}},
+            ],
+            "/api/batteries": [
+                {"status": 200, "payload": _GOOD_BATTERIES},
+                {"status": 200, "payload": _GOOD_BATTERIES},
+            ],
+        })
+        await meter.read(session)
+        second = await meter.read(session)
+        assert second.grid_power == 850.0, (
+            f"HTTP 401 on /api/measurement masked as grid_power=0 "
+            f"(got {second.grid_power}). Without a status check, an auth "
+            f"failure looks identical to a balanced grid."
+        )
+
+    @pytest.mark.asyncio
+    async def test_first_read_failure_returns_zeros(self):
+        # No last-known to fall back to; defaults are correct.
+        meter = HWP1Meter("1.2.3.4", "tok")
+        session = _FakeMultiURLSession({
+            "/api/measurement": [{"raise_on_get": ConnectionError("dead on arrival")}],
+            "/api/batteries": [{"raise_on_get": ConnectionError("dead on arrival")}],
+        })
+        status = await meter.read(session)
+        assert status.grid_power == 0.0
+        assert status.pib_power == 0.0
+        assert status.pib_count == 0
 
 
 class TestOptionalHASensorStaleness:

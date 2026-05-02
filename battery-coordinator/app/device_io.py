@@ -178,53 +178,66 @@ class HWP1Meter:
         self._ssl = ssl.create_default_context()
         self._ssl.check_hostname = False
         self._ssl.verify_mode = ssl.CERT_NONE
+        # Last-known values per endpoint. Mirrors ZendureDevice's caching:
+        # the brain treats every Reading as ground truth, so a transient
+        # blip returning 0/standby/[] would propagate as a false "balanced
+        # grid + PIBs idle" signal and reset transition holdoff timers.
+        # None until the first successful read of that endpoint.
+        self._last_grid_power: float | None = None
+        self._last_pib_power: float | None = None
+        self._last_pib_mode: str | None = None
+        self._last_pib_permissions: list[str] | None = None
+        self._last_pib_count: int | None = None
 
     def _headers(self):
         return {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
 
+    async def _get_json(self, session: aiohttp.ClientSession, path: str) -> dict | None:
+        """GET path and return parsed JSON, or None on any failure.
+
+        Centralises the status-check + exception-catch the brain depends on:
+        a 401 (bad token) or 500 must NOT silently fall through as
+        data.get("...", 0), which would mask auth failures as "balanced
+        grid" or "PIBs at zero".
+        """
+        try:
+            async with session.get(
+                f"{self._url}{path}",
+                headers=self._headers(),
+                timeout=self._timeout,
+                ssl=self._ssl,
+            ) as r:
+                if r.status != 200:
+                    log.warning("HW P1 %s: HTTP %s", path, r.status)
+                    return None
+                return await r.json()
+        except Exception as e:
+            log.warning("HW P1 %s read failed (%s): %s", path, type(e).__name__, e)
+            return None
+
     async def read(self, session: aiohttp.ClientSession) -> P1Status:
-        """Read P1 grid power and battery status."""
-        grid_power = 0.0
-        pib_power = 0.0
-        pib_mode = "standby"
-        pib_permissions: list[str] = []
-        pib_count = 0
+        """Read P1 grid power and battery status.
 
-        # Read grid power from /api/measurement
-        try:
-            async with session.get(
-                f"{self._url}/api/measurement",
-                headers=self._headers(),
-                timeout=self._timeout,
-                ssl=self._ssl,
-            ) as r:
-                data = await r.json()
-                grid_power = data.get("power_w", 0)
-        except Exception as e:
-            log.warning("HW P1 /api/measurement read failed (%s): %s", type(e).__name__, e)
+        Each endpoint caches independently — a /api/batteries blip while
+        /api/measurement succeeds doesn't discard the fresh grid power.
+        """
+        measurement = await self._get_json(session, "/api/measurement")
+        if measurement is not None:
+            self._last_grid_power = measurement.get("power_w", 0)
 
-        # Read battery status from /api/batteries
-        try:
-            async with session.get(
-                f"{self._url}/api/batteries",
-                headers=self._headers(),
-                timeout=self._timeout,
-                ssl=self._ssl,
-            ) as r:
-                data = await r.json()
-                pib_power = data.get("power_w", 0)
-                pib_mode = data.get("mode", "standby")
-                pib_permissions = data.get("permissions", [])
-                pib_count = data.get("battery_count", 0)
-        except Exception as e:
-            log.warning("HW P1 /api/batteries read failed (%s): %s", type(e).__name__, e)
+        batteries = await self._get_json(session, "/api/batteries")
+        if batteries is not None:
+            self._last_pib_power = batteries.get("power_w", 0)
+            self._last_pib_mode = batteries.get("mode", "standby")
+            self._last_pib_permissions = batteries.get("permissions", [])
+            self._last_pib_count = batteries.get("battery_count", 0)
 
         return P1Status(
-            grid_power=grid_power,
-            pib_power=pib_power,
-            pib_mode=pib_mode,
-            pib_permissions=pib_permissions,
-            pib_count=pib_count,
+            grid_power=self._last_grid_power if self._last_grid_power is not None else 0.0,
+            pib_power=self._last_pib_power if self._last_pib_power is not None else 0.0,
+            pib_mode=self._last_pib_mode if self._last_pib_mode is not None else "standby",
+            pib_permissions=list(self._last_pib_permissions) if self._last_pib_permissions is not None else [],
+            pib_count=self._last_pib_count if self._last_pib_count is not None else 0,
         )
 
     async def set_mode(self, session: aiohttp.ClientSession, mode: str, permissions: list[str] | None = None) -> bool:
