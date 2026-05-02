@@ -106,7 +106,6 @@ battery-coordinator/      The HA add-on (config.yaml, Dockerfile, app/)
     config.py             Reads /data/options.json or env vars
     device_io.py          Zendure + HW P1 + (optional) HA solar
     brains/permission_fsm.py   The FSM brain
-coordinator_cli.py        Legacy systemd CLI (HA REST, kept for handover scenarios)
 tests/                    Unit + property-based + invariant tests
 ```
 
@@ -117,11 +116,11 @@ uv sync
 uv run pytest tests/ -q
 ```
 
-Run the standalone CLI in dry-run against your live setup:
+Run the coordinator standalone (dry-run, no commands sent):
 
 ```bash
-HA_URL=http://your-ha:8123 HA_TOKEN=... \
-  uv run python coordinator_cli.py
+ZENDURE_IP=192.168.1.x HW_P1_IP=192.168.1.y HW_P1_TOKEN=... \
+  DRY_RUN=true uv run python battery-coordinator/app/main.py
 ```
 
 ## Caveats

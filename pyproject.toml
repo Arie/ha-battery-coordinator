@@ -24,7 +24,7 @@ line-length = 120
 
 [tool.ruff.lint]
 # E402: imports after sys.path manipulation (required for app module path)
-per-file-ignores = {"coordinator_cli.py" = ["E402"], "tests/*.py" = ["E402"]}
+per-file-ignores = {"tests/*.py" = ["E402"]}
 
 [dependency-groups]
 dev = [
