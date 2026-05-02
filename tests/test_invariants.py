@@ -1013,11 +1013,10 @@ class TestTransitionTimersResetOnStateEntry:
         # then returning. Direct manipulation skips the natural FSM path
         # so the test stays focused on the timer-reset invariant rather
         # than the choreography of getting back to SLEEP.
-        dummy = _steady_reading(p1=0, zen_soc=50, pib1_soc=50, pib2_soc=50)
         brain.state = State.CHARGE
-        brain._init_step_for_new_state(dummy)
+        brain._init_step_for_new_state()
         brain.state = State.SLEEP
-        brain._init_step_for_new_state(dummy)
+        brain._init_step_for_new_state()
 
         # Re-arm the wake transition at t=6. With the reset: arms at t=6,
         # fires at t=16. Without the reset: stale _since=0, fires at t=10.

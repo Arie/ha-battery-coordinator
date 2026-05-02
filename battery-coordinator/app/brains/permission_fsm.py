@@ -380,7 +380,7 @@ class PermissionFSM:
             if trans.holdoff_s == 0:
                 # Immediate transition
                 self.state = trans.to
-                self._init_step_for_new_state(r)
+                self._init_step_for_new_state()
                 return trans.pib_mode, trans.pib_permissions
 
             # Timed holdoff
@@ -389,13 +389,13 @@ class PermissionFSM:
             elif t - trans._since >= trans.holdoff_s:
                 trans.reset()
                 self.state = trans.to
-                self._init_step_for_new_state(r)
+                self._init_step_for_new_state()
                 return trans.pib_mode, trans.pib_permissions
             # else: still counting, don't reset
 
         return None, None
 
-    def _init_step_for_new_state(self, r: Reading) -> None:
+    def _init_step_for_new_state(self) -> None:
         """Initialise the Zendure step on entering a new state. Default 0."""
         self._zen_step_idx = 0
         # Reset NOM-mode tracker so a new CHARGE entry starts fresh.
