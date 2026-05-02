@@ -18,14 +18,13 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["battery-coordinator/app", "tests"]
-norecursedirs = ["tests/legacy"]
 
 [tool.ruff]
 line-length = 120
 
 [tool.ruff.lint]
 # E402: imports after sys.path manipulation (required for app module path)
-per-file-ignores = {"coordinator_cli.py" = ["E402"], "tests/*.py" = ["E402"], "tests/play_day.py" = ["E701", "F841"], "tests/simulator.py" = ["F841"]}
+per-file-ignores = {"coordinator_cli.py" = ["E402"], "tests/*.py" = ["E402"]}
 
 [dependency-groups]
 dev = [
