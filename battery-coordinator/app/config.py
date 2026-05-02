@@ -13,6 +13,8 @@ import json
 import os
 from pathlib import Path
 
+from brains.permission_fsm import PermissionFSM
+
 
 # HA Supervisor writes the add-on's options here inside the container.
 ADDON_OPTIONS_PATH = "/data/options.json"
@@ -40,22 +42,9 @@ class _ConfigParseError(ValueError):
     so validate() can surface a coherent list of problems instead of crashing
     on the first bad field."""
 
-# Defaults for brain tuning — production-tested in PermissionFSM.
-_BRAIN_DEFAULTS = {
-    "step_holdoff_s": 15,
-    "flip_s": 30,
-    "wake_charge_s": 10,
-    "wake_discharge_s": 30,
-    "help_enter_s": 15,
-    "help_exit_s": 15,
-    "pib_high_w": 1200,
-    "pib_maxed_w": 1400,
-    "pib_low_w": 200,
-    "pib_taper_cap_w": 600,
-    "nom_deadband_w": 10,
-    "p1_export_w": -100,
-    "p1_import_w": 200,
-}
+# Single source of truth for brain defaults — defined on PermissionFSM so
+# the bare PermissionFSM() constructor and the Config() path can't drift.
+_BRAIN_DEFAULTS = PermissionFSM.DEFAULTS
 
 
 class Config:

@@ -18,6 +18,26 @@ class TestDefaults:
         assert b.P1_EXPORT == -100
         assert b.P1_IMPORT == 200
 
+    def test_class_constants_match_DEFAULTS(self):
+        # Both Config() and bare PermissionFSM() pull from DEFAULTS — if a
+        # class constant drifts from the dict, the two paths produce
+        # different brains. Pin them together.
+        d = PermissionFSM.DEFAULTS
+        b = PermissionFSM()
+        assert b.PIB_HIGH == d["pib_high_w"]
+        assert b.PIB_MAXED == d["pib_maxed_w"]
+        assert b.PIB_LOW == d["pib_low_w"]
+        assert b.PIB_TAPER_CAP == d["pib_taper_cap_w"]
+        assert b.STEP_HOLDOFF == d["step_holdoff_s"]
+        assert b.FLIP_S == d["flip_s"]
+        assert b.WAKE_CHARGE_S == d["wake_charge_s"]
+        assert b.WAKE_DISCHARGE_S == d["wake_discharge_s"]
+        assert b.HELP_ENTER_S == d["help_enter_s"]
+        assert b.HELP_EXIT_S == d["help_exit_s"]
+        assert b.NOM_DEADBAND == d["nom_deadband_w"]
+        assert b.P1_EXPORT == d["p1_export_w"]
+        assert b.P1_IMPORT == d["p1_import_w"]
+
 
 class TestOverrides:
     def test_each_tunable_can_be_overridden(self):

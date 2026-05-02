@@ -76,22 +76,39 @@ class PermissionFSM:
     # Zendure stepped power levels (charge mode)
     ZEN_STEPS = [0, 200, 400, 800, 1200, 1600, 2000, 2400]
 
-    # PIB saturation thresholds for stepping
-    PIB_MAXED = 1400        # near hardware max → fast step-up
-    PIB_HIGH = 1200         # busy → normal step-up
-    PIB_LOW = 200           # barely working → step-down
+    # PIB saturation thresholds for stepping. Defaults live in DEFAULTS so
+    # config.py and the bare PermissionFSM() constructor see the same values.
+    DEFAULTS: dict = {
+        "step_holdoff_s": 15,
+        "flip_s": 30,
+        "wake_charge_s": 10,
+        "wake_discharge_s": 30,
+        "help_enter_s": 15,
+        "help_exit_s": 15,
+        "pib_high_w": 1200,
+        "pib_maxed_w": 1400,
+        "pib_low_w": 200,
+        "pib_taper_cap_w": 600,
+        "nom_deadband_w": 10,
+        "p1_export_w": -100,
+        "p1_import_w": 200,
+    }
+
+    PIB_MAXED = DEFAULTS["pib_maxed_w"]
+    PIB_HIGH = DEFAULTS["pib_high_w"]
+    PIB_LOW = DEFAULTS["pib_low_w"]
 
     # Step timing
-    STEP_HOLDOFF = 15       # seconds before normal step change
+    STEP_HOLDOFF = DEFAULTS["step_holdoff_s"]
     STEP_HOLDOFF_FAST = 5   # seconds before fast step-up (PIBs maxed)
     STEP_DOWN_COOLDOWN = 30 # seconds after step-up before allowing step-down
 
     # Transition holdoffs
-    WAKE_CHARGE_S = 10      # sustained export before SLEEP → CHARGE
-    WAKE_DISCHARGE_S = 30   # sustained import before SLEEP → DISCHARGE
-    FLIP_S = 30             # sustained signal before charge ↔ discharge flip
-    HELP_ENTER_S = 15       # sustained Zen maxed before waking PIBs
-    HELP_EXIT_S = 15        # sustained low load before standbying PIBs
+    WAKE_CHARGE_S = DEFAULTS["wake_charge_s"]
+    WAKE_DISCHARGE_S = DEFAULTS["wake_discharge_s"]
+    FLIP_S = DEFAULTS["flip_s"]
+    HELP_ENTER_S = DEFAULTS["help_enter_s"]
+    HELP_EXIT_S = DEFAULTS["help_exit_s"]
 
     # Heartbeats — re-assert desired state so silent drift (failed PUT,
     # external app toggle, integration refresh) self-heals within a bounded
@@ -99,8 +116,8 @@ class PermissionFSM:
     PIB_HEARTBEAT_S = 300   # re-send pib_mode/permissions every 5 min
 
     # P1 thresholds
-    P1_EXPORT = -100        # P1 below this = exporting (surplus)
-    P1_IMPORT = 200         # P1 above this = importing (deficit)
+    P1_EXPORT = DEFAULTS["p1_export_w"]
+    P1_IMPORT = DEFAULTS["p1_import_w"]
     P1_OVER_DISCHARGE = -100  # P1 below this in DISCHARGE_HELP = load dropped
 
     # Zendure capacity thresholds
@@ -108,10 +125,10 @@ class PermissionFSM:
     ZEN_HELP_EXIT_FRAC = 0.8  # total discharge below this fraction → PIBs redundant
 
     # PIB taper
-    PIB_TAPER_CAP = 600     # per-PIB max charge below this = in taper zone
+    PIB_TAPER_CAP = DEFAULTS["pib_taper_cap_w"]
 
     # NOM send deadband
-    NOM_DEADBAND = 10       # minimum change before sending in NOM mode
+    NOM_DEADBAND = DEFAULTS["nom_deadband_w"]
 
     def __init__(
         self,
