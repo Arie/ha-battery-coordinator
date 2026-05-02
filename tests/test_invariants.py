@@ -816,6 +816,78 @@ class TestPIBCommandRate:
         assert commands <= 5, f"Sent {commands} PIB commands in 300 ticks of steady discharge"
 
 
+class TestChargeNomBoundaryRamp:
+    """When CHARGE switches from stepped to NOM (PIBs entering taper),
+    the target shouldn't jump ~1.4kW in a single tick — Zen overshoot
+    follows. Clamp the first NOM tick to one step above the current
+    stepped target."""
+
+    def test_first_nom_tick_clamps_to_one_step_jump(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 3  # 800W stepped baseline
+
+        # Drive a stepped tick first so the brain knows it was stepped.
+        brain.decide(
+            _steady_reading(p1=-200, solar=2000,
+                            zen_power=800, zen_soc=50,
+                            pib1=400, pib2=400,
+                            pib1_soc=50, pib2_soc=50),
+            t=0,
+        )
+
+        # Next tick: PIBs hit taper (97% SOC). NOM target = zen_power - p1
+        # = 800 - (-2000) = 2800 → clamped to max 2400.
+        # The first NOM tick should clamp to current_step + 400 = 1200,
+        # not jump to 2400.
+        d = brain.decide(
+            _steady_reading(p1=-2000, solar=4000,
+                            zen_power=800, zen_soc=50,
+                            pib1=240, pib2=240,
+                            pib1_soc=97, pib2_soc=97),  # both in taper
+            t=1,
+        )
+        assert d.target <= 1200, (
+            f"First NOM tick jumped to {d.target}W from a stepped baseline "
+            f"of 800W. Should have clamped to one step (~+400W) above the "
+            "stepped target to avoid Zen overshoot."
+        )
+
+    def test_subsequent_nom_ticks_use_full_target(self):
+        """After the first NOM tick has 'announced' NOM mode, subsequent
+        ticks can use the full computed NOM target."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 3  # 800W
+
+        # Stepped tick
+        brain.decide(
+            _steady_reading(p1=-200, solar=2000,
+                            zen_power=800, zen_soc=50,
+                            pib1=400, pib2=400,
+                            pib1_soc=50, pib2_soc=50),
+            t=0,
+        )
+        # First NOM tick (clamped)
+        brain.decide(
+            _steady_reading(p1=-2000, solar=4000,
+                            zen_power=800, zen_soc=50,
+                            pib1=240, pib2=240,
+                            pib1_soc=97, pib2_soc=97),
+            t=1,
+        )
+        # Subsequent NOM tick — full NOM applies. zen_power=1200, p1=-2000
+        # → nom = 1200 - (-2000) = 3200 → clamped to max 2400.
+        d = brain.decide(
+            _steady_reading(p1=-2000, solar=4000,
+                            zen_power=1200, zen_soc=50,
+                            pib1=240, pib2=240,
+                            pib1_soc=97, pib2_soc=97),
+            t=2,
+        )
+        assert d.target == 2400
+
+
 class TestP1Convergence:
     """P1 should converge toward zero within reasonable time
     (unless batteries are at their limits)."""

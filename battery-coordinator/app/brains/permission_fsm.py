@@ -212,6 +212,9 @@ class PermissionFSM:
         self._last_step_up_t: float = -999
         self._last_zen_power: float = 0
         self._last_p1: float = 0
+        # Tracks whether the previous CHARGE-state tick was in NOM mode,
+        # so the stepped→NOM boundary can ramp instead of jumping.
+        self._charge_was_nom: bool = False
 
         self.sm = _FakeSM()
 
@@ -415,6 +418,8 @@ class PermissionFSM:
     def _init_step_for_new_state(self, r: Reading) -> None:
         """Initialise the Zendure step on entering a new state. Default 0."""
         self._zen_step_idx = 0
+        # Reset NOM-mode tracker so a new CHARGE entry starts fresh.
+        self._charge_was_nom = False
 
     def _compute_target(self, r: Reading, pib_abs: float, t: float) -> int:
         """Compute Zendure target power for current state."""
@@ -426,11 +431,24 @@ class PermissionFSM:
             pibs_taper = _all_in_taper(r, self.PIB_TAPER_CAP)
 
             if (pib_charge_cap == 0 or pibs_taper) and r.zen_soc < self.zen_soc_max:
-                # NOM: PIBs at limit, Zendure absorbs remaining
+                # NOM: PIBs at limit, Zendure absorbs remaining.
                 nom = int(r.zen_power - r.p1)
-                return max(PILOT_W, min(self.max_charge, nom))
+                target = max(PILOT_W, min(self.max_charge, nom))
+                # Smooth the stepped→NOM boundary. On the first NOM tick
+                # after a meaningful stepped baseline, the target can leap
+                # ~1.4kW (e.g. step 800 → full NOM 2400) which exceeds the
+                # urgent-send threshold and causes Zen overshoot. Clamp to
+                # one step above the prior stepped target on that first NOM
+                # tick; subsequent ticks use the full NOM value.
+                # Skip the clamp when current_step==0 (nothing to ramp from):
+                # the brain hasn't sent anything meaningful yet.
+                if not self._charge_was_nom and self._current_step() > 0:
+                    target = min(target, self._current_step() + 400)
+                self._charge_was_nom = True
+                return target
             else:
                 # Stepped: PIBs are the sensor
+                self._charge_was_nom = False
                 self._update_step(pib_abs, t, r.p1, pib_charge_cap)
                 return self._current_step()
 
