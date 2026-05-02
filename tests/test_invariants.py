@@ -324,11 +324,13 @@ class TestStandbyAtSaturation:
         brain = PermissionFSM()
         brain.state = brain.state.__class__("PIB_DISCHARGE")
 
-        brain.decide(
-            _steady_reading(p1=0, zen_soc=10, pib1=0, pib2=0,
-                            pib1_soc=0, pib2_soc=0),
-            t=0,
-        )
+        # PIB_DISCHARGE→SLEEP now has a 3s exit holdoff; loop a few ticks.
+        for tick in range(5):
+            brain.decide(
+                _steady_reading(p1=0, zen_soc=10, pib1=0, pib2=0,
+                                pib1_soc=0, pib2_soc=0),
+                t=tick,
+            )
         assert brain.state.value == "SLEEP"
 
         for tick in range(int(PermissionFSM.WAKE_CHARGE_S) + 5):
@@ -352,16 +354,22 @@ class TestSleepEntryUsesStandby:
         brain = PermissionFSM()
         brain.state = brain.state.__class__("PIB_DISCHARGE")
 
-        d = brain.decide(
-            _steady_reading(p1=0, zen_power=0, zen_soc=10,
-                            pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
-            t=0,
-        )
+        # PIB_DISCHARGE→SLEEP has a 3s exit holdoff; capture the
+        # transition tick (when pib_mode flips to standby).
+        transition_d = None
+        for tick in range(5):
+            d = brain.decide(
+                _steady_reading(p1=0, zen_power=0, zen_soc=10,
+                                pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+                t=tick,
+            )
+            if d.pib_mode is not None:
+                transition_d = d
 
         assert brain.state.value == "SLEEP"
-        assert d.pib_mode == "standby", (
+        assert transition_d is not None and transition_d.pib_mode == "standby", (
             f"Expected pib_mode='standby' on PIB_DISCHARGE→SLEEP, got "
-            f"{d.pib_mode!r}."
+            f"{transition_d.pib_mode if transition_d else None!r}."
         )
 
     def test_discharge_to_sleep_uses_standby(self):
