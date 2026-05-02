@@ -208,6 +208,7 @@ class PermissionFSM:
         self._zen_step_idx = 0
         self._pib_high_since: float | None = None
         self._pib_low_since: float | None = None
+        self._p1_contradict_since: float | None = None
         self._last_step_up_t: float = -999
         self._last_zen_power: float = 0
         self._last_p1: float = 0
@@ -355,7 +356,20 @@ class PermissionFSM:
         else:
             self._pib_high_since = None
 
-        p1_contradicts = (self.state == State.DISCHARGE and p1 < -200) or (self.state == State.CHARGE and p1 > 200)
+        # Debounce P1 contradiction. A 1-tick spike (e.g. brief load-on
+        # during charge) is sensor noise, not a real signal — without
+        # debouncing, it shortens the step-down holdoff from 15s to 5s
+        # and triggers spurious fast step-down. Require 3s of sustained
+        # contradiction before treating it as real.
+        p1_contradicts_now = (self.state == State.DISCHARGE and p1 < -200) or (self.state == State.CHARGE and p1 > 200)
+        if p1_contradicts_now:
+            if self._p1_contradict_since is None:
+                self._p1_contradict_since = t
+            p1_contradicts = (t - self._p1_contradict_since) >= 3
+        else:
+            self._p1_contradict_since = None
+            p1_contradicts = False
+
         cooldown_ok = p1_contradicts or (t - self._last_step_up_t) >= self.STEP_DOWN_COOLDOWN
         if pib_abs < self.PIB_LOW and cooldown_ok:
             if self._pib_low_since is None:

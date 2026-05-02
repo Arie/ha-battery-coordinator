@@ -623,6 +623,80 @@ class TestNeverDischargeToExport:
         )
 
 
+class TestP1ContradictDebounce:
+    """A brief P1 spike contradicting our state direction shouldn't
+    trigger fast step-down on its own — it has to persist a few ticks."""
+
+    def test_brief_p1_spike_no_fast_step_down(self):
+        """A 1-tick p1 spike during CHARGE shouldn't accelerate step-down.
+
+        Setup: brain in CHARGE at step 4 (1200W), PIBs been at low (0W)
+        for 7 ticks — between FAST (5s) and NORMAL (15s) holdoff. Without
+        debounce, a single-tick p1>+200W spike tips us past 'p1_contradicts'
+        which uses FAST, firing step-down. With debounce (3s sustained),
+        a 1-tick spike is ignored.
+        """
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 4  # 1200W
+        brain._last_step_up_t = -100  # cooldown long elapsed
+
+        # 7 ticks of PIBs idle, no contradicting P1 → pib_low_since=0
+        for tick in range(7):
+            brain.decide(
+                _steady_reading(p1=-50, solar=2000,
+                                zen_power=1200, zen_soc=50,
+                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                t=tick,
+            )
+        assert brain._zen_step_idx == 4
+
+        # 1-tick contradicting P1 spike at t=7. PIBs still idle.
+        # Without debounce: t - pib_low_since = 7 >= STEP_HOLDOFF_FAST (5)
+        # → fast step-down fires immediately.
+        # With 3s sustained debounce: contradiction not yet "real",
+        # falls back to normal 15s holdoff which hasn't elapsed.
+        brain.decide(
+            _steady_reading(p1=300, solar=2000,
+                            zen_power=1200, zen_soc=50,
+                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            t=7,
+        )
+        assert brain._zen_step_idx == 4, (
+            "A 1-tick p1>+200W spike triggered fast step-down. "
+            "Contradiction should require a few sustained ticks before "
+            "shortening the step holdoff."
+        )
+
+    def test_sustained_contradiction_still_fast_steps(self):
+        """Sustained p1_contradicts does eventually trigger fast step-down."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 4
+        brain._last_step_up_t = -100
+
+        # Establish low-PIB state without contradiction
+        for tick in range(7):
+            brain.decide(
+                _steady_reading(p1=-50, solar=2000,
+                                zen_power=1200, zen_soc=50,
+                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                t=tick,
+            )
+        # Now sustain p1>+200 for >= 3s + STEP_HOLDOFF_FAST (5s)
+        for tick in range(7, 7 + 8):
+            brain.decide(
+                _steady_reading(p1=300, solar=2000,
+                                zen_power=1200, zen_soc=50,
+                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                t=tick,
+            )
+        assert brain._zen_step_idx < 4, (
+            f"Sustained contradiction should still allow fast step-down, "
+            f"but step is still {brain._zen_step_idx}."
+        )
+
+
 class TestPIBSendFailureRetry:
     """A failed PIB permission PUT must trigger immediate retry on the next
     tick — waiting 5 minutes for the heartbeat is the difference between
