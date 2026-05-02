@@ -18,7 +18,6 @@ import time
 from datetime import datetime
 
 import aiohttp
-
 from brains.permission_fsm import PermissionFSM
 from config import Config
 from device_io import DeviceIO

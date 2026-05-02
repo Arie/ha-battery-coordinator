@@ -11,7 +11,6 @@ import time
 from dataclasses import dataclass
 
 import aiohttp
-
 from config import Config
 from coordinator_logic import Reading
 
@@ -77,7 +76,7 @@ class ZendureDevice:
 
         # Power: outputHomePower for discharge, gridInputPower for charge
         ac_mode = props.get("acMode", 0)
-        if ac_mode == 2:
+        if ac_mode == 2:  # noqa: SIM108  (a ternary loses the branch-side direction comments)
             power = -props.get("outputHomePower", 0)  # negative = discharge
         else:
             power = props.get("gridInputPower", 0)  # positive = charge

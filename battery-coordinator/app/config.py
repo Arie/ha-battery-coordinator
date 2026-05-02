@@ -15,7 +15,6 @@ from pathlib import Path
 
 from brains.permission_fsm import PermissionFSM
 
-
 # HA Supervisor writes the add-on's options here inside the container.
 ADDON_OPTIONS_PATH = "/data/options.json"
 
@@ -34,7 +33,7 @@ def _safe_int(value, *, field: str, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
-        raise _ConfigParseError(f"{field}: cannot parse {value!r} as int")
+        raise _ConfigParseError(f"{field}: cannot parse {value!r} as int") from None
 
 
 def _safe_float(value, *, field: str, default: float) -> float:
@@ -44,7 +43,7 @@ def _safe_float(value, *, field: str, default: float) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
-        raise _ConfigParseError(f"{field}: cannot parse {value!r} as float")
+        raise _ConfigParseError(f"{field}: cannot parse {value!r} as float") from None
 
 
 class _ConfigParseError(ValueError):

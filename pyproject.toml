@@ -22,8 +22,26 @@ pythonpath = ["battery-coordinator/app", "tests"]
 line-length = 120
 
 [tool.ruff.lint]
+# E/F (pycodestyle errors + pyflakes) — defaults that catch syntax/import bugs.
+# I    — import sort.
+# B    — bugbear: real bug patterns (mutable defaults, shadowed builtins, etc.).
+# UP   — pyupgrade: keep syntax current with the project's >=3.12 floor.
+# SIM  — simplify: collapse redundant if/else, dict-style refactors.
+# RUF  — ruff-specific lints (subscript-vs-iterator, dataclass mistakes, etc.).
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    # Em/en-dashes are intentional throughout docstrings, comments, and a
+    # couple of validate() messages — they're the project's house typography,
+    # not Unicode-confusable smuggling.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
 # E402: imports after sys.path manipulation (required for app module path)
-per-file-ignores = {"tests/*.py" = ["E402"]}
+# SIM300: Yoda-condition lint flips `assert b.X == d["x"]` to put the dict
+#         access on the left. The current order reads as "the brain agrees
+#         with the dict" which is the test's actual intent.
+per-file-ignores = {"tests/*.py" = ["E402", "SIM300"]}
 
 [dependency-groups]
 dev = [

@@ -21,7 +21,7 @@ class Reading:
     1, 2, 3, or 4 PIBs all "just work".
     """
 
-    __slots__ = ("p1", "pibs", "pib_socs", "zen_power", "zen_soc", "solar")
+    __slots__ = ("p1", "pib_socs", "pibs", "solar", "zen_power", "zen_soc")
 
     def __init__(
         self,

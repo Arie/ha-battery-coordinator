@@ -5,14 +5,14 @@ invariants hold regardless of the scenario. Catches edge cases that
 specific test scenarios miss.
 """
 
-import sys
 import random
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
-from coordinator_logic import Reading
 from brains.permission_fsm import PermissionFSM
+from coordinator_logic import Reading
 
 
 def _random_reading(rng, zen_soc=50, pib1_soc=50, pib2_soc=50):
@@ -59,9 +59,8 @@ class TestNoRapidStateBouncing:
             brain.decide(r, t=tick)
             state = brain.state.value
             states.append(state)
-            if len(states) >= 3:
-                if states[-1] == states[-3] and states[-1] != states[-2]:
-                    bounces += 1
+            if len(states) >= 3 and states[-1] == states[-3] and states[-1] != states[-2]:
+                bounces += 1
         return bounces
 
     def test_no_bounce_pib_99_100_boundary(self):

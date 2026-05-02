@@ -7,8 +7,9 @@ and entry-action (pib_mode + pib_permissions).
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import ClassVar
 
-from coordinator_logic import Reading, Decision, PILOT_W, pib_max_charge
+from coordinator_logic import PILOT_W, Decision, Reading, pib_max_charge
 
 
 def _total_charge_cap(r: Reading) -> int:
@@ -60,11 +61,11 @@ class PermissionFSM:
     AC_DISCHARGE = 2
 
     # Zendure stepped power levels (charge mode)
-    ZEN_STEPS = [0, 200, 400, 800, 1200, 1600, 2000, 2400]
+    ZEN_STEPS: ClassVar[list[int]] = [0, 200, 400, 800, 1200, 1600, 2000, 2400]
 
     # PIB saturation thresholds for stepping. Defaults live in DEFAULTS so
     # config.py and the bare PermissionFSM() constructor see the same values.
-    DEFAULTS: dict = {
+    DEFAULTS: ClassVar[dict[str, int]] = {
         "step_holdoff_s": 15,
         "flip_s": 30,
         "wake_charge_s": 10,
@@ -546,9 +547,7 @@ class PermissionFSM:
         target = self._compute_target(r, pib_abs, t)
 
         # SOC clamp
-        if r.zen_soc >= self.zen_soc_max and target > 0:
-            target = 0
-        elif r.zen_soc <= self.zen_soc_min and target < 0:
+        if (r.zen_soc >= self.zen_soc_max and target > 0) or (r.zen_soc <= self.zen_soc_min and target < 0):
             target = 0
 
         # Send logic

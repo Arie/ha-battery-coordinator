@@ -12,8 +12,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
+from brains.permission_fsm import PermissionFSM, _all_in_taper, _total_charge_cap
 from coordinator_logic import Reading
-from brains.permission_fsm import PermissionFSM, _total_charge_cap, _all_in_taper
 
 
 def _r(p1, pibs, pib_socs, *, zen_power=0, zen_soc=50, solar=0):
