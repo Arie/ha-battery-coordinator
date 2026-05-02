@@ -7,6 +7,7 @@ Optional HA connection for solar sensor only.
 import asyncio
 import logging
 import ssl
+import time
 from dataclasses import dataclass
 
 import aiohttp
@@ -291,17 +292,24 @@ class OptionalHASensor:
         if not self._url:
             return 0.0
         if now is None:
-            import time
             now = time.monotonic()
         try:
             headers = {"Authorization": f"Bearer {self._token}"}
             async with session.get(self._url, headers=headers, timeout=self._timeout) as r:
-                data = await r.json()
-                v = data.get("state")
-                if v is not None and v not in ("unknown", "unavailable"):
-                    self._last_value = float(v)
-                    self._last_value_t = now
-                    return self._last_value
+                if r.status != 200:
+                    # An error page that happens to parse as JSON with a
+                    # 'state' key (proxy template, supervisor error envelope)
+                    # would silently overwrite the cached value with garbage
+                    # without this guard. Fall through to the cache fallback
+                    # below — it has its own staleness check.
+                    log.warning("HA sensor %s: HTTP %s", self._url, r.status)
+                else:
+                    data = await r.json()
+                    v = data.get("state")
+                    if v is not None and v not in ("unknown", "unavailable"):
+                        self._last_value = float(v)
+                        self._last_value_t = now
+                        return self._last_value
         except Exception:
             pass
         # Read failed. Use last-known if it's still fresh; beyond the

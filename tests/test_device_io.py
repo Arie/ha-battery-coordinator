@@ -424,3 +424,55 @@ class TestOptionalHASensorStaleness:
         # 30s later the cache is still fresh (only 30s into a new 60s window).
         v = await sensor.read(session, now=80.0)
         assert v == 60.0
+
+
+class TestOptionalHASensorHTTPStatus:
+    """A non-200 response from HA must NOT update the cache, even if its
+    body happens to parse as JSON with a 'state' key. Without an explicit
+    status check, an error page that happens to contain `{"state": ...}`
+    (proxy template, supervisor error envelope) silently overwrites the
+    last-known value with garbage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_200_does_not_poison_cache(self):
+        sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
+        session = _FakeStateSession([
+            {"status": 200, "payload": {"state": "75"}},
+            # 500 with a JSON-shaped error body that has a 'state' key.
+            {"status": 500, "payload": {"state": "999"}},
+        ])
+        first = await sensor.read(session, now=0.0)
+        assert first == 75.0
+
+        second = await sensor.read(session, now=30.0)
+        assert second == 75.0, (
+            f"HTTP 500 with body={{'state': '999'}} poisoned the cache "
+            f"(got {second}) — without a status check, an error page that "
+            f"happens to be valid JSON silently overrides the real value."
+        )
+
+    @pytest.mark.asyncio
+    async def test_401_falls_through_to_cache(self):
+        sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
+        session = _FakeStateSession([
+            {"status": 200, "payload": {"state": "75"}},
+            # 401 Unauthorized (e.g. token expired) — typical body has
+            # 'message' but not 'state'. Even so, status check should
+            # short-circuit before touching the body.
+            {"status": 401, "payload": {"message": "API password missing"}},
+        ])
+        await sensor.read(session, now=0.0)
+        v = await sensor.read(session, now=30.0)
+        assert v == 75.0, (
+            "401 response should fall through to last-known cache, not "
+            "leak through as 0.0."
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_200_first_read_returns_default_zero(self):
+        # No prior cache; non-200 → default 0.0, no exception.
+        sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
+        session = _FakeStateSession([{"status": 502, "payload": {}}])
+        v = await sensor.read(session, now=0.0)
+        assert v == 0.0
