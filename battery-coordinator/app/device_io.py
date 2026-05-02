@@ -242,8 +242,6 @@ class HWP1Meter:
 
     async def set_mode(self, session: aiohttp.ClientSession, mode: str, permissions: list[str] | None = None) -> bool:
         """Set PIB mode and permissions."""
-        if mode == "charge":
-            mode = "to_full"
         payload: dict = {"mode": mode}
         if permissions is not None:
             payload["permissions"] = permissions
