@@ -53,3 +53,15 @@ mypy_path = ["battery-coordinator/app", "tests"]
 # aiohttp ships type stubs but py3-aiohttp on alpine doesn't expose them
 # in every dev environment; this is the lenient floor we ratchet from.
 ignore_missing_imports = true
+# Typecheck inside untyped function bodies — catches things like
+# 'None + int' that hide in test helpers.
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# test_device_io passes hand-rolled fake sessions (_FakeSession,
+# _FakeMultiURLSession, _FakeStateSession, _RecordingSession) to
+# production methods that take aiohttp.ClientSession. The fakes are
+# duck-typed mocks by design — making them satisfy the real ClientSession
+# Protocol is far more code than it's worth.
+module = "tests.test_device_io"
+disable_error_code = ["arg-type"]

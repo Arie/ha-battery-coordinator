@@ -803,6 +803,7 @@ class TestPIBSendFailureRetry:
             )
             if d.pib_mode == "standby":
                 transition_t = tick
+        assert transition_t is not None, "Should have transitioned and emitted pib_mode"
         d = brain.decide(
             _steady_reading(p1=500, zen_power=-500, zen_soc=70, pib1_soc=70, pib2_soc=70),
             t=transition_t + 1,
