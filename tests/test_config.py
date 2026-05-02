@@ -299,6 +299,29 @@ class TestValidate:
         errors = c.validate()
         assert any("READ_TIMEOUT" in e for e in errors), errors
 
+    def test_invalid_log_level_surfaces_through_validate(self, clean_env, monkeypatch, tmp_path):
+        # A typo in LOG_LEVEL used to crash startup with a bare ValueError
+        # from log.setLevel("VERBOSE") — bypassing the rest of validate().
+        # The addon-options path is schema-checked; the env-var path is not,
+        # so duplicate the check inside validate().
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        monkeypatch.setenv("LOG_LEVEL", "verbose")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        errors = c.validate()
+        assert any("log_level" in e.lower() for e in errors), errors
+
+    def test_valid_log_level_lowercase_passes(self, clean_env, monkeypatch, tmp_path):
+        # The existing addon path stores `info` from options.json; the env
+        # path stores upper-cased — both should pass.
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        monkeypatch.setenv("LOG_LEVEL", "debug")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        assert c.validate() == []
+
     def test_pib_lists_same_length_passes(self, clean_env, monkeypatch, tmp_path):
         # Same-length PIB lists shouldn't add their own validation errors.
         # Need SUPERVISOR_TOKEN since PIB entities trigger HA proxy mode.

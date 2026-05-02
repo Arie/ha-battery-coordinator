@@ -198,6 +198,15 @@ class Config:
             errors.append(f"zen_soc_min must be 0–100 (got {self.zen_soc_min})")
         if not (0 <= self.zen_soc_max <= 100):
             errors.append(f"zen_soc_max must be 0–100 (got {self.zen_soc_max})")
+        # log_level is schema-validated for the addon path, but the env-var
+        # path bypasses the schema. A typo (e.g. LOG_LEVEL=verbose) would
+        # crash startup at log.setLevel() with a bare ValueError, after
+        # validate() had already declared the config OK. Catch it here.
+        if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
+            errors.append(
+                f"log_level must be one of debug/info/warning/error "
+                f"(got {self.log_level!r})"
+            )
         # Both lists must be configured together. Setting only one makes
         # device_io pad the other with zeros, which the brain reads as
         # ghost 0%-SOC PIBs (or 0W phantom power) and over-corrects on.
