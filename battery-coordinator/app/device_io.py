@@ -100,6 +100,23 @@ class ZendureDevice:
         self._last_status = status
         return status
 
+    async def fetch_sn(self, session: aiohttp.ClientSession,
+                       max_attempts: int = 60, delay_s: float = 5.0) -> str:
+        """Poll until the device reports a non-empty SN.
+
+        After a host reboot the device may take 1–2 minutes to populate
+        the SN field. Without this retry the coordinator gets an empty
+        SN once at startup and locks itself into observe-only mode for
+        the rest of the day (every write requires the SN). Idempotent;
+        safe to call repeatedly.
+        """
+        for _ in range(max_attempts):
+            status = await self.read(session)
+            if status.sn:
+                return status.sn
+            await asyncio.sleep(delay_s)
+        return ""
+
     async def charge(self, session: aiohttp.ClientSession, watts: int, mode_switch: bool = False) -> bool:
         """Set charge power. mode_switch=True flips relay to charge mode.
 

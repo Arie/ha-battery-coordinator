@@ -62,9 +62,12 @@ async def main():
     HEARTBEAT_S = 60  # log a status line at INFO at least this often
 
     async with aiohttp.ClientSession() as session:
-        # Read initial Zendure SN
-        zen_status = await io.zendure.read(session)
-        log.info(f"Zendure SN: {zen_status.sn}")
+        # Read initial Zendure SN. Retry — the device may take 1–2 min
+        # after a host reboot to populate it, and writes need the SN.
+        zen_sn = await io.zendure.fetch_sn(session)
+        log.info(f"Zendure SN: {zen_sn or '<not yet available>'}")
+        if not zen_sn and not config.dry_run:
+            log.warning("Zendure SN never appeared — running in observe-only mode")
 
         prev_state = None
         prev_target: int | None = None

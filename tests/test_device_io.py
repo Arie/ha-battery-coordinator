@@ -136,3 +136,53 @@ class TestZendureReadResilience:
         await zen.read(session)
         third = await zen.read(session)
         assert third.sn == "HEC-TEST"
+
+
+class TestZendureFetchSN:
+    """fetch_sn polls until the device returns a usable SN.
+
+    Production bug 2026-04-25 09:59 in coordinator_cli: after a host
+    reboot the integration took ~80s to populate SN; the coordinator
+    fetched once, got empty, and stayed observe-only for the rest of
+    the day. The retry pattern was previously only in the CLI; the
+    add-on path read once at startup and missed the retry."""
+
+    @pytest.mark.asyncio
+    async def test_returns_sn_immediately(self):
+        zen = ZendureDevice("1.2.3.4")
+        session = _FakeSession([{"status": 200, "payload": _GOOD_REPORT}])
+        sn = await zen.fetch_sn(session, max_attempts=3, delay_s=0)
+        assert sn == "HEC-TEST"
+
+    @pytest.mark.asyncio
+    async def test_retries_past_empty(self):
+        empty = {"sn": "", "properties": {}}
+        zen = ZendureDevice("1.2.3.4")
+        session = _FakeSession([
+            {"status": 200, "payload": empty},
+            {"status": 200, "payload": empty},
+            {"status": 200, "payload": _GOOD_REPORT},
+        ])
+        sn = await zen.fetch_sn(session, max_attempts=10, delay_s=0)
+        assert sn == "HEC-TEST"
+
+    @pytest.mark.asyncio
+    async def test_retries_past_exceptions(self):
+        zen = ZendureDevice("1.2.3.4")
+        session = _FakeSession([
+            {"raise_on_get": ConnectionError("dead")},
+            {"raise_on_get": TimeoutError()},
+            {"status": 200, "payload": _GOOD_REPORT},
+        ])
+        sn = await zen.fetch_sn(session, max_attempts=10, delay_s=0)
+        assert sn == "HEC-TEST"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_after_max_attempts(self):
+        zen = ZendureDevice("1.2.3.4")
+        session = _FakeSession([
+            {"raise_on_get": ConnectionError("nope")},
+            {"raise_on_get": ConnectionError("nope")},
+        ])
+        sn = await zen.fetch_sn(session, max_attempts=2, delay_s=0)
+        assert sn == ""
