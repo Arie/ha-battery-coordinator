@@ -159,8 +159,8 @@ class HWP1Meter:
             ) as r:
                 data = await r.json()
                 grid_power = data.get("power_w", 0)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("HW P1 /api/measurement read failed (%s): %s", type(e).__name__, e)
 
         # Read battery status from /api/batteries
         try:
@@ -175,8 +175,8 @@ class HWP1Meter:
                 pib_mode = data.get("mode", "standby")
                 pib_permissions = data.get("permissions", [])
                 pib_count = data.get("battery_count", 0)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("HW P1 /api/batteries read failed (%s): %s", type(e).__name__, e)
 
         return P1Status(
             grid_power=grid_power,
@@ -201,8 +201,18 @@ class HWP1Meter:
                 timeout=self._timeout,
                 ssl=self._ssl,
             ) as r:
-                return r.status == 200
-        except Exception:
+                if r.status != 200:
+                    log.warning(
+                        "HW P1 set_mode failed: HTTP %s (mode=%s perms=%s)",
+                        r.status, mode, permissions,
+                    )
+                    return False
+                return True
+        except Exception as e:
+            log.warning(
+                "HW P1 set_mode failed (%s): %s (mode=%s perms=%s)",
+                type(e).__name__, e, mode, permissions,
+            )
             return False
 
 
