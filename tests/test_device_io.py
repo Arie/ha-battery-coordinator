@@ -10,6 +10,7 @@ into a hardware command.
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -19,7 +20,9 @@ from device_io import HWP1Meter, OptionalHASensor, ZendureDevice
 
 
 class _FakeResponse:
-    def __init__(self, *, status: int = 200, payload: dict | None = None, raise_on_get: Exception | None = None):
+    def __init__(
+        self, *, status: int = 200, payload: dict[str, Any] | None = None, raise_on_get: Exception | None = None
+    ):
         self.status = status
         self._payload = payload or {}
         self._raise = raise_on_get
@@ -214,7 +217,7 @@ class _RecordingSession:
     """Captures every write payload so tests can assert what was sent."""
 
     def __init__(self):
-        self.writes: list[dict] = []
+        self.writes: list[dict[str, Any]] = []
 
     def post(self, url, json=None, headers=None, timeout=None):
         self.writes.append({"url": url, "json": json})
@@ -261,7 +264,7 @@ class _FakeMultiURLSession:
     Keying by URL keeps the tests readable and order-independent.
     """
 
-    def __init__(self, scripts: dict[str, list[dict]]):
+    def __init__(self, scripts: dict[str, list[dict[str, Any]]]):
         self._scripts = {k: list(v) for k, v in scripts.items()}
 
     def get(self, url, headers=None, timeout=None, ssl=None):
