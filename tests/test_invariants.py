@@ -211,8 +211,8 @@ class TestDoesNotKillWorkingZendure:
         # Brain may decide target=0 in stepped mode, but it must NOT mark
         # the decision as send=True (which would push standby to Zendure).
         assert not (d.target == 0 and d.send), (
-            f"Brain wants to send target=0 (standby) while Zen is charging "
-            f"from surplus (zen_power=2386, p1=-591). Would kill the Zen."
+            "Brain wants to send target=0 (standby) while Zen is charging "
+            "from surplus (zen_power=2386, p1=-591). Would kill the Zen."
         )
 
     def test_target_zero_with_zen_idle_can_still_send_standby(self):

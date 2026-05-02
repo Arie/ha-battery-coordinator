@@ -1,7 +1,6 @@
 """Config loads from /data/options.json (HA add-on) or env vars (Docker)."""
 
 import json
-import os
 import sys
 from pathlib import Path
 

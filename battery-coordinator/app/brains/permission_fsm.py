@@ -7,22 +7,7 @@ in a transition table instead of scattered if/elif blocks.
 from dataclasses import dataclass, field
 from enum import Enum
 
-from coordinator_logic import Reading, Decision, PILOT_W, pib_max_charge, pib_max_discharge
-
-
-class _FakeZone:
-    """Minimal zone holder so callers can read brain.sm.zone.value."""
-
-    def __init__(self):
-        self.value = "idle"
-
-
-class _FakeSM:
-    """Backwards-compatible shim — older callers (and the simulator)
-    expected `brain.sm.zone.value` to look up the current state."""
-
-    def __init__(self):
-        self.zone = _FakeZone()
+from coordinator_logic import Reading, Decision, PILOT_W, pib_max_charge
 
 
 def _total_charge_cap(r: Reading) -> int:
@@ -215,8 +200,6 @@ class PermissionFSM:
         # Tracks whether the previous CHARGE-state tick was in NOM mode,
         # so the stepped→NOM boundary can ramp instead of jumping.
         self._charge_was_nom: bool = False
-
-        self.sm = _FakeSM()
 
         # --- Transition table ---
         # Each state maps to a list of transitions, checked in order.
@@ -472,8 +455,6 @@ class PermissionFSM:
         self._last_zen_power = r.zen_power
         self._last_p1 = r.p1
 
-        prev_state = self.state
-
         # Check transitions
         pib_mode, pib_permissions = self._check_transitions(r, pib_abs, t)
 
@@ -502,16 +483,13 @@ class PermissionFSM:
         # Send logic
         target, send, urgent = self._should_send(target, t)
 
-        self.sm.zone.value = self.state.value.lower()
         direction = "charging" if target > 0 else ("discharging" if target < 0 else "idle")
 
         return Decision(
             target=target,
             zone=self.state.value,
             hunting_dir=direction,
-            confirmed_dir=direction,
             pib_dir=pib_dir,
-            both_maxed=False,
             send=send,
             urgent=urgent,
             pib_mode=pib_mode,
