@@ -117,6 +117,12 @@ async def main():
             if not config.dry_run and (d.pib_mode or d.pib_permissions is not None):
                 pib_mode = d.pib_mode or "zero"
                 ok = await io.p1.set_mode(session, pib_mode, d.pib_permissions)
+                if not ok:
+                    # Don't wait 5 min for the heartbeat — re-emit next tick.
+                    # PIB permission PUTs are the cross-charge lock; a silent
+                    # failure means batteries can fight until the next
+                    # heartbeat lands.
+                    brain.mark_pib_send_failed()
                 perms = ""
                 if d.pib_permissions is not None:
                     perms = "(" + ",".join(p.replace("_allowed", "") for p in d.pib_permissions) + ")"

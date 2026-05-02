@@ -498,6 +498,13 @@ class PermissionFSM:
         send = heartbeat or change >= 50
         return target, send, urgent
 
+    def mark_pib_send_failed(self) -> None:
+        """Force the next decide() to re-emit pib_mode/permissions immediately,
+        bypassing the heartbeat throttle. Call this from the I/O layer after
+        a set_mode PUT fails so we recover within 1s instead of waiting up
+        to PIB_HEARTBEAT_S (5 min) for the next scheduled re-assertion."""
+        self._pib_send_t = -999
+
     def mark_sent(self, target: int, t: float, ac_mode: int | None = None) -> None:
         self.last_sent_target = target
         self.last_send_time = t

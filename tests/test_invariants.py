@@ -596,6 +596,61 @@ class TestNeverDischargeToExport:
         )
 
 
+class TestPIBSendFailureRetry:
+    """A failed PIB permission PUT must trigger immediate retry on the next
+    tick — waiting 5 minutes for the heartbeat is the difference between
+    'cross-charge prevented' and 'lockout never asserted, batteries fight'.
+    """
+
+    def test_mark_pib_send_failed_forces_next_tick_resend(self):
+        brain = PermissionFSM()
+        transition_t = None
+        # Drive a SLEEP→DISCHARGE transition so brain has a desired mode.
+        for tick in range(int(PermissionFSM.WAKE_DISCHARGE_S) + 5):
+            d = brain.decide(
+                _steady_reading(p1=500, zen_soc=80, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+            if d.pib_mode == "standby":
+                transition_t = tick
+        assert transition_t is not None, "Should have transitioned and emitted pib_mode"
+
+        # Simulate the PUT failing on the transition — caller signals it.
+        brain.mark_pib_send_failed()
+
+        # Next tick should re-emit pib_mode immediately, not wait for the
+        # 5-minute heartbeat.
+        d = brain.decide(
+            _steady_reading(p1=500, zen_power=-500, zen_soc=70,
+                            pib1_soc=70, pib2_soc=70),
+            t=transition_t + 1,
+        )
+        assert d.pib_mode == "standby", (
+            "After mark_pib_send_failed, next decide() must re-emit the "
+            "desired pib_mode. Without this, a single failed PUT means "
+            f"{PermissionFSM.PIB_HEARTBEAT_S}s of cross-charge risk."
+        )
+
+    def test_no_resend_without_failure_signal(self):
+        # Sanity: without the failure signal, normal heartbeat throttle
+        # applies and there's no spurious extra send.
+        brain = PermissionFSM()
+        transition_t = None
+        for tick in range(int(PermissionFSM.WAKE_DISCHARGE_S) + 5):
+            d = brain.decide(
+                _steady_reading(p1=500, zen_soc=80, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+            if d.pib_mode == "standby":
+                transition_t = tick
+        d = brain.decide(
+            _steady_reading(p1=500, zen_power=-500, zen_soc=70,
+                            pib1_soc=70, pib2_soc=70),
+            t=transition_t + 1,
+        )
+        assert d.pib_mode is None
+
+
 class TestPIBCommandRate:
     """Should not send more than a few PIB commands per minute in steady state."""
 
