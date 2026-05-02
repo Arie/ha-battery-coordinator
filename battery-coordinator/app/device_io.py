@@ -246,17 +246,30 @@ class HWP1Meter:
 
 
 class OptionalHASensor:
-    """Read a single sensor from HA. Returns 0 if not configured or unavailable."""
+    """Read a single sensor from HA. Returns 0 if not configured or unavailable.
 
-    def __init__(self, ha_url: str, ha_token: str, entity_id: str, timeout: float = 3):
+    Caches the last successful value across transient failures so a 1s
+    network blip doesn't propagate as a 0 reading into the brain. The
+    cache invalidates after `max_stale_s` of continuous failure — beyond
+    that, a stale SOC is more dangerous than a default 0 (which the
+    brain treats as "missing/empty" and reaches a safe state).
+    """
+
+    def __init__(self, ha_url: str, ha_token: str, entity_id: str,
+                 timeout: float = 3, max_stale_s: float = 60):
         self._url = f"{ha_url}/api/states/{entity_id}" if ha_url and entity_id else ""
         self._token = ha_token
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._last_value: float = 0
+        self._last_value_t: float | None = None
+        self._max_stale_s = max_stale_s
 
-    async def read(self, session: aiohttp.ClientSession) -> float:
+    async def read(self, session: aiohttp.ClientSession, now: float | None = None) -> float:
         if not self._url:
             return 0.0
+        if now is None:
+            import time
+            now = time.monotonic()
         try:
             headers = {"Authorization": f"Bearer {self._token}"}
             async with session.get(self._url, headers=headers, timeout=self._timeout) as r:
@@ -264,10 +277,25 @@ class OptionalHASensor:
                 v = data.get("state")
                 if v is not None and v not in ("unknown", "unavailable"):
                     self._last_value = float(v)
+                    self._last_value_t = now
                     return self._last_value
         except Exception:
             pass
-        return self._last_value  # return last known on failure
+        # Read failed. Use last-known if it's still fresh; beyond the
+        # stale window, return 0 so the brain can reach a safe state
+        # rather than acting on a multi-minute-old SOC.
+        if (
+            self._last_value_t is not None
+            and (now - self._last_value_t) <= self._max_stale_s
+        ):
+            return self._last_value
+        if self._last_value_t is not None:
+            log.warning(
+                "HA sensor %s stale > %ss; returning 0",
+                self._url, self._max_stale_s,
+            )
+            self._last_value_t = None  # log once until next success
+        return 0.0
 
 
 class DeviceIO:

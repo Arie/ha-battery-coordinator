@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
-from device_io import ZendureDevice
+from device_io import OptionalHASensor, ZendureDevice
 
 
 class _FakeResponse:
@@ -186,3 +186,76 @@ class TestZendureFetchSN:
         ])
         sn = await zen.fetch_sn(session, max_attempts=2, delay_s=0)
         assert sn == ""
+
+
+class _FakeStateSession:
+    """Returns scripted HA /api/states/<entity> responses."""
+
+    def __init__(self, scripted):
+        self._queue = list(scripted)
+
+    def get(self, url, headers=None, timeout=None):
+        item = self._queue.pop(0) if self._queue else {"status": 200, "payload": {"state": "unavailable"}}
+        return _FakeResponse(**item)
+
+
+class TestOptionalHASensorStaleness:
+    """Cached values shouldn't be returned forever after HA dies.
+
+    Stale SOC values are dangerous: if HA goes down at 50% SOC and the
+    PIB actually drains to 0%, the brain still sees 50% and won't exit
+    PIB_DISCHARGE. After a max_stale_s window, the cache is invalidated
+    so the brain at least sees a fresh-but-default 0 and can reach a
+    safe state.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_cached_within_window(self):
+        sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
+        session = _FakeStateSession([
+            {"status": 200, "payload": {"state": "75"}},
+            {"raise_on_get": ConnectionError("blip")},
+        ])
+        first = await sensor.read(session, now=0.0)
+        assert first == 75.0
+
+        # Within max_stale_s the cached value is still trusted.
+        second = await sensor.read(session, now=30.0)
+        assert second == 75.0
+
+    @pytest.mark.asyncio
+    async def test_returns_zero_after_stale_window(self):
+        sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
+        session = _FakeStateSession([
+            {"status": 200, "payload": {"state": "75"}},
+            {"raise_on_get": ConnectionError("HA down")},
+            {"raise_on_get": ConnectionError("HA still down")},
+        ])
+        await sensor.read(session, now=0.0)
+        await sensor.read(session, now=30.0)
+
+        stale = await sensor.read(session, now=120.0)
+        assert stale == 0.0, (
+            "After max_stale_s of failed reads the cache must invalidate; "
+            "returning a 2-minute-old SOC could push the brain into a "
+            "dangerous state when HA actually came back at a different value."
+        )
+
+    @pytest.mark.asyncio
+    async def test_successful_read_resets_stale_window(self):
+        sensor = OptionalHASensor("http://ha:8123", "tok", "sensor.x", max_stale_s=60)
+        session = _FakeStateSession([
+            {"status": 200, "payload": {"state": "75"}},
+            {"raise_on_get": ConnectionError("blip")},
+            {"status": 200, "payload": {"state": "60"}},
+            {"raise_on_get": ConnectionError("blip")},
+        ])
+        await sensor.read(session, now=0.0)
+        await sensor.read(session, now=30.0)
+        # Recovery: new read at t=50, cache resets.
+        v = await sensor.read(session, now=50.0)
+        assert v == 60.0
+
+        # 30s later the cache is still fresh (only 30s into a new 60s window).
+        v = await sensor.read(session, now=80.0)
+        assert v == 60.0
