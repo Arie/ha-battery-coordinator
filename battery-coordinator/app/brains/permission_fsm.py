@@ -43,7 +43,7 @@ class Transition:
     # Set by the FSM at runtime — not part of the definition
     _since: float | None = field(default=None, init=False, repr=False)
 
-    def reset(self):
+    def reset(self) -> None:
         self._since = None
 
 

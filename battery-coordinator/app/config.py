@@ -12,6 +12,7 @@ code never has to know which mode it's running in.
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from brains.permission_fsm import PermissionFSM
 
@@ -23,7 +24,7 @@ def _split_csv(s: str) -> list[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 
 
-def _safe_int(value, *, field: str, default: int) -> int:
+def _safe_int(value: Any, *, field: str, default: int) -> int:
     """Parse an int, returning default with a clear error if the value
     is malformed. Used in both options-file and env-var paths so a typo
     in user config produces a useful message via validate() instead of
@@ -36,7 +37,7 @@ def _safe_int(value, *, field: str, default: int) -> int:
         raise _ConfigParseError(f"{field}: cannot parse {value!r} as int") from None
 
 
-def _safe_float(value, *, field: str, default: float) -> float:
+def _safe_float(value: Any, *, field: str, default: float) -> float:
     """Float counterpart of _safe_int — same purpose, same error path."""
     if value is None or value == "":
         return default
@@ -98,7 +99,7 @@ class Config:
 
     # --- Path 1: HA add-on (Supervisor-managed) ---
 
-    def _load_from_options(self, o: dict) -> None:
+    def _load_from_options(self, o: dict[str, Any]) -> None:
         self.zendure_ip = o.get("zendure_ip", "")
         self.hw_p1_ip = o.get("hw_p1_ip", "")
         self.hw_p1_token = o.get("hw_p1_token", "")
@@ -225,7 +226,7 @@ class Config:
             )
         return errors
 
-    def brain_kwargs(self) -> dict:
+    def brain_kwargs(self) -> dict[str, int]:
         """Kwargs for PermissionFSM(...)."""
         return {
             "max_charge_w": self.zen_max_charge_w,

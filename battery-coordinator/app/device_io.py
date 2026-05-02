@@ -9,6 +9,7 @@ import logging
 import ssl
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 from config import Config
@@ -150,7 +151,7 @@ class ZendureDevice:
         reboot, external app toggle) without a flash write per beat."""
         return await self._write(session, {"smartMode": 1, "outputLimit": 0, "inputLimit": 0})
 
-    async def _write(self, session: aiohttp.ClientSession, properties: dict) -> bool:
+    async def _write(self, session: aiohttp.ClientSession, properties: dict[str, int]) -> bool:
         try:
             payload = {"sn": self._sn, "properties": properties}
             write_timeout = aiohttp.ClientTimeout(total=5)
@@ -186,10 +187,10 @@ class HWP1Meter:
         self._last_pib_permissions: list[str] | None = None
         self._last_pib_count: int | None = None
 
-    def _headers(self):
+    def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
 
-    async def _get_json(self, session: aiohttp.ClientSession, path: str) -> dict | None:
+    async def _get_json(self, session: aiohttp.ClientSession, path: str) -> dict[str, Any] | None:
         """GET path and return parsed JSON, or None on any failure.
 
         Centralises the status-check + exception-catch the brain depends on:
@@ -207,7 +208,8 @@ class HWP1Meter:
                 if r.status != 200:
                     log.warning("HW P1 %s: HTTP %s", path, r.status)
                     return None
-                return await r.json()
+                data: dict[str, Any] = await r.json()
+                return data
         except Exception as e:
             log.warning("HW P1 %s read failed (%s): %s", path, type(e).__name__, e)
             return None
@@ -239,7 +241,7 @@ class HWP1Meter:
 
     async def set_mode(self, session: aiohttp.ClientSession, mode: str, permissions: list[str] | None = None) -> bool:
         """Set PIB mode and permissions."""
-        payload: dict = {"mode": mode}
+        payload: dict[str, Any] = {"mode": mode}
         if permissions is not None:
             payload["permissions"] = permissions
         try:

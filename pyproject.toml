@@ -50,12 +50,25 @@ dev = [
 python_version = "3.12"
 files = ["battery-coordinator/app", "tests"]
 mypy_path = ["battery-coordinator/app", "tests"]
+strict = true
 # aiohttp ships type stubs but py3-aiohttp on alpine doesn't expose them
-# in every dev environment; this is the lenient floor we ratchet from.
+# in every dev environment; keep this on so missing stubs don't fail CI.
 ignore_missing_imports = true
-# Typecheck inside untyped function bodies — catches things like
-# 'None + int' that hide in test helpers.
-check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Tests are intentionally loose: pytest helpers don't need full
+# annotations to be readable, the hand-rolled fakes are duck-typed
+# (test_device_io extends this further by also disabling arg-type),
+# and forcing strictness on test code would be far more churn than
+# value. Keep check_untyped_defs so we still catch real bugs hiding
+# inside untyped helpers (e.g. 'None + int').
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false
+disallow_untyped_decorators = false
+disallow_any_generics = false
+warn_return_any = false
 
 [[tool.mypy.overrides]]
 # test_device_io passes hand-rolled fake sessions (_FakeSession,

@@ -31,7 +31,7 @@ logging.basicConfig(
 log = logging.getLogger("coordinator")
 
 
-async def main():
+async def main() -> None:
     parser = argparse.ArgumentParser(description="Battery Coordinator")
     parser.add_argument("--live", action="store_true", help="Force live mode (overrides DRY_RUN env / dry_run option)")
     args = parser.parse_args()
