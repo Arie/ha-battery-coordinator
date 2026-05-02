@@ -261,8 +261,12 @@ class PermissionFSM:
                 (Transition(State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]),
                  lambda r, _: r.p1 < self.P1_EXPORT),
                 # Zendure can handle alone → back to solo
-                # P1 negative = over-discharging, load dropped → back to NOM solo
-                (Transition(State.DISCHARGE, holdoff_s=0, pib_mode="standby"),
+                # P1 negative = over-discharging, load dropped → back to NOM solo.
+                # 3s holdoff filters the 1-2 tick PIB activation transient
+                # (HW P1 controller slams 0→max in one tick on entry, briefly
+                # overshooting load by ~1.6kW). Real load drops still exit,
+                # just 3s later instead of instantly.
+                (Transition(State.DISCHARGE, holdoff_s=3, pib_mode="standby"),
                  lambda r, _: r.p1 < self.P1_OVER_DISCHARGE),
                 (Transition(State.DISCHARGE, holdoff_s=self.HELP_EXIT_S, pib_mode="standby"),
                  lambda r, _: abs(r.zen_power) + max(0, -sum(r.pibs)) < self.max_discharge * self.ZEN_HELP_EXIT_FRAC),

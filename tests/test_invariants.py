@@ -1034,3 +1034,68 @@ class TestTransitionTimersResetOnStateEntry:
             "from the previous SLEEP visit let the 10s holdoff appear "
             "elapsed after only ~5s of fresh signal."
         )
+
+
+class TestDischargeHelpOverDischargeHoldoff:
+    """The DISCHARGE_HELP → DISCHARGE bail on `r.p1 < P1_OVER_DISCHARGE`
+    must filter the 1–2-tick PIB activation transient. The HW P1 meter's
+    autonomous PIB controller slams from 0 to ~max in a single tick on
+    `zero+discharge_allowed`; with combined Zen+PIB discharge briefly
+    exceeding load by ~1.6 kW, P1 spikes negative for a tick or two
+    before NOM equilibrium catches up. Pre-fix, this caused 22 state
+    bounces in 5 minutes of heavy EV load (production 2026-05-01)."""
+
+    def test_pib_overshoot_does_not_bail_help_immediately(self):
+        """1-tick P1 dip below P1_OVER_DISCHARGE during PIB activation
+        must not exit DISCHARGE_HELP. P1 returns positive within 1-2s
+        as the PIBs settle to NOM."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE_HELP")
+
+        # Tick 0: PIB slam-on transient — P1 briefly below -100.
+        brain.decide(
+            _steady_reading(p1=-200, zen_power=-2400,
+                            pib1=-781, pib2=-803,
+                            pib1_soc=98, pib2_soc=94),
+            t=0,
+        )
+        # Tick 1-2: PIBs settling, P1 back above -100.
+        brain.decide(
+            _steady_reading(p1=+50, zen_power=-2400,
+                            pib1=-500, pib2=-600,
+                            pib1_soc=98, pib2_soc=94),
+            t=1,
+        )
+        brain.decide(
+            _steady_reading(p1=+200, zen_power=-2400,
+                            pib1=-400, pib2=-450,
+                            pib1_soc=98, pib2_soc=94),
+            t=2,
+        )
+
+        assert brain.state.value == "DISCHARGE_HELP", (
+            f"Expected DISCHARGE_HELP, got {brain.state.value}. A 1-tick "
+            "P1 overshoot during the PIB activation transient should not "
+            "trigger an immediate exit — the holdoff filters it."
+        )
+
+    def test_real_over_discharge_still_exits(self):
+        """Sustained P1 < P1_OVER_DISCHARGE for the holdoff window (i.e.,
+        load actually dropped) must still exit DISCHARGE_HELP."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE_HELP")
+
+        # 5 consecutive ticks of -300W — load really dropped.
+        for tick in range(5):
+            brain.decide(
+                _steady_reading(p1=-300, zen_power=-2400,
+                                pib1=-700, pib2=-700,
+                                pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+
+        assert brain.state.value == "DISCHARGE", (
+            f"Expected DISCHARGE after sustained over-discharge, got "
+            f"{brain.state.value}. A real load drop must still trigger "
+            "the bail, just with a small holdoff to filter PIB transients."
+        )
