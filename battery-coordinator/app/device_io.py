@@ -41,6 +41,9 @@ class P1Status:
     pib_count: int
 
 
+_ZERO_STATUS = ZendureStatus(0, 0, 0, 0, 0, 0, 0, "")
+
+
 class ZendureDevice:
     """Direct local REST API to Zendure 2400 AC."""
 
@@ -48,20 +51,26 @@ class ZendureDevice:
         self._url = f"http://{ip}"
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._sn: str = ""
+        # Cache the last successful read. The brain has no concept of stale
+        # data — returning zeros on a transient HTTP error makes it see
+        # "Zen drained, 0W output" and trigger spurious mode flips. Holding
+        # the previous value across blips keeps the brain on a coherent
+        # picture; the heartbeat / explicit timeouts handle real outages.
+        self._last_status: ZendureStatus | None = None
 
     async def read(self, session: aiohttp.ClientSession) -> ZendureStatus:
-        """Read current device status."""
+        """Read current device status. On failure return last-known."""
         try:
             async with session.get(
                 f"{self._url}/properties/report", timeout=self._timeout
             ) as r:
                 if r.status != 200:
                     log.warning("Zendure read: HTTP %s from %s", r.status, self._url)
-                    return ZendureStatus(0, 0, 0, 0, 0, 0, 0, "")
+                    return self._last_status or _ZERO_STATUS
                 data = await r.json(content_type=None)
         except Exception as e:
             log.warning("Zendure read failed (%s): %s", type(e).__name__, e)
-            return ZendureStatus(0, 0, 0, 0, 0, 0, 0, "")
+            return self._last_status or _ZERO_STATUS
 
         props = data.get("properties", {})
         self._sn = data.get("sn", self._sn)
@@ -77,7 +86,7 @@ class ZendureDevice:
         raw_temp = props.get("hyperTmp", 2731)
         temp = (raw_temp - 2731) / 10.0
 
-        return ZendureStatus(
+        status = ZendureStatus(
             power=power,
             soc=props.get("electricLevel", 0),
             ac_mode=ac_mode,
@@ -87,6 +96,8 @@ class ZendureDevice:
             pack_count=props.get("packNum", 0),
             sn=self._sn,
         )
+        self._last_status = status
+        return status
 
     async def charge(self, session: aiohttp.ClientSession, watts: int, mode_switch: bool = False) -> bool:
         """Set charge power. mode_switch=True flips relay to charge mode.
