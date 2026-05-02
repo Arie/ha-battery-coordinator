@@ -8,12 +8,6 @@ dependencies = [
     "aiohttp>=3.9.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["battery-coordinator/app", "tests"]
@@ -45,6 +39,8 @@ per-file-ignores = {"tests/*.py" = ["E402", "SIM300"]}
 
 [dependency-groups]
 dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
     "pyyaml>=6.0.3",
     "ruff>=0.15.9",
 ]
