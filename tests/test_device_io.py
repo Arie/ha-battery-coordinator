@@ -199,6 +199,49 @@ class _FakeStateSession:
         return _FakeResponse(**item)
 
 
+class _RecordingSession:
+    """Captures every write payload so tests can assert what was sent."""
+
+    def __init__(self):
+        self.writes: list[dict] = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.writes.append({"url": url, "json": json})
+        return _FakeResponse(status=200, payload={})
+
+
+class TestZendureStandbyFlashWear:
+    """standby() persists smartMode=0 to flash; the brain re-asserts target=0
+    every 30s in SLEEP / PIB_DISCHARGE. Flashing every 30s wears the device.
+
+    Heartbeat re-assertions for an already-zero target should use a
+    RAM-only command, not a flash write. The first transition into
+    target=0 should still flash so the device deep-sleeps across reboots.
+    """
+
+    @pytest.mark.asyncio
+    async def test_standby_writes_flash_smartmode_zero(self):
+        zen = ZendureDevice("1.2.3.4")
+        zen._sn = "TEST"
+        session = _RecordingSession()
+        await zen.standby(session)
+        assert session.writes[0]["json"]["properties"]["smartMode"] == 0
+
+    @pytest.mark.asyncio
+    async def test_hold_zero_writes_ram_smartmode_one(self):
+        zen = ZendureDevice("1.2.3.4")
+        zen._sn = "TEST"
+        session = _RecordingSession()
+        await zen.hold_zero(session)
+        props = session.writes[0]["json"]["properties"]
+        assert props["smartMode"] == 1, (
+            "Heartbeat re-assertion of target=0 must NOT flash (smartMode=0). "
+            "Use RAM-only smartMode=1 with outputLimit=inputLimit=0."
+        )
+        assert props["outputLimit"] == 0
+        assert props["inputLimit"] == 0
+
+
 class TestOptionalHASensorStaleness:
     """Cached values shouldn't be returned forever after HA dies.
 

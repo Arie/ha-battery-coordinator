@@ -138,8 +138,20 @@ class ZendureDevice:
 
     async def standby(self, session: aiohttp.ClientSession) -> bool:
         """Deep standby — inverter off, persist to flash so it stays off
-        across reboots and the device can drop into low-power mode."""
+        across reboots and the device can drop into low-power mode.
+
+        Flash writes wear the device's storage. Use this only for the
+        FIRST entry into target=0; for heartbeat re-assertions of an
+        already-zero target, call hold_zero() instead.
+        """
         return await self._write(session, {"smartMode": 0, "outputLimit": 0, "inputLimit": 0})
+
+    async def hold_zero(self, session: aiohttp.ClientSession) -> bool:
+        """RAM-only zero — same effective state as standby (no charge,
+        no discharge) but doesn't persist to flash. Used for heartbeat
+        re-assertion of target=0 so we recover from drift (firmware
+        reboot, external app toggle) without a flash write per beat."""
+        return await self._write(session, {"smartMode": 1, "outputLimit": 0, "inputLimit": 0})
 
     async def _write(self, session: aiohttp.ClientSession, properties: dict) -> bool:
         try:

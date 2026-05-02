@@ -97,9 +97,18 @@ async def main():
                     brain.mark_sent(d.target, t)
                     sent = f" SENT discharge {abs(d.target)}W" + (" (mode switch)" if mode_switch else "")
                 elif d.target == 0:
-                    ok = await io.zendure.standby(session)
+                    # First entry into target=0 (last_ac_mode still set
+                    # from a prior charge/discharge) → flash standby so
+                    # the device deep-sleeps across reboots. Subsequent
+                    # heartbeat re-assertions → RAM-only hold_zero, to
+                    # avoid wearing flash with ~2880 writes/day.
+                    if brain.last_ac_mode is not None:
+                        ok = await io.zendure.standby(session)
+                        sent = " SENT standby"
+                    else:
+                        ok = await io.zendure.hold_zero(session)
+                        sent = " SENT hold-zero"
                     brain.mark_sent(0, t)
-                    sent = " SENT standby"
                 if sent and not ok:
                     sent += " FAILED!"
 
