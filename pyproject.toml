@@ -39,8 +39,17 @@ per-file-ignores = {"tests/*.py" = ["E402", "SIM300"]}
 
 [dependency-groups]
 dev = [
+    "mypy>=1.13",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pyyaml>=6.0.3",
     "ruff>=0.15.9",
 ]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["battery-coordinator/app", "tests"]
+mypy_path = ["battery-coordinator/app", "tests"]
+# aiohttp ships type stubs but py3-aiohttp on alpine doesn't expose them
+# in every dev environment; this is the lenient floor we ratchet from.
+ignore_missing_imports = true

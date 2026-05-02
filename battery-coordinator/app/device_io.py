@@ -361,20 +361,23 @@ class DeviceIO:
         All reads run concurrently. With 4 PIBs × 2 entities + Zen + P1
         + solar that's up to ~10 HTTPS requests per tick — sequential
         would easily blow past the 1Hz tick budget on a slow HA host.
+
+        TaskGroup keeps the heterogeneous Zen/P1/solar reads and the
+        homogeneous per-PIB list reads in one parallel batch while still
+        type-checking — a flat asyncio.gather with star-args collapses
+        every result to `object`.
         """
-        results = await asyncio.gather(
-            self.zendure.read(session),
-            self.p1.read(session),
-            self.solar.read(session),
-            *(s.read(session) for s in self.pib_socs),
-            *(p.read(session) for p in self.pib_powers),
-        )
-        zen = results[0]
-        p1 = results[1]
-        solar = results[2]
-        pib_soc_end = 3 + len(self.pib_socs)
-        pib_socs = list(results[3:pib_soc_end])
-        pib_powers = list(results[pib_soc_end:])
+        async with asyncio.TaskGroup() as tg:
+            zen_t = tg.create_task(self.zendure.read(session))
+            p1_t = tg.create_task(self.p1.read(session))
+            solar_t = tg.create_task(self.solar.read(session))
+            pib_soc_ts = [tg.create_task(s.read(session)) for s in self.pib_socs]
+            pib_power_ts = [tg.create_task(p.read(session)) for p in self.pib_powers]
+        zen = zen_t.result()
+        p1 = p1_t.result()
+        solar = solar_t.result()
+        pib_socs: list[float] = [t.result() for t in pib_soc_ts]
+        pib_powers: list[float] = [t.result() for t in pib_power_ts]
 
         # Fallback when no per-PIB power entities are configured: split the
         # combined value from /api/batteries evenly across PIBs. Rough but

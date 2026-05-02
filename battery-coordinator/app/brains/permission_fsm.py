@@ -5,6 +5,7 @@ scattered if/elif blocks; each Transition owns its own holdoff timer
 and entry-action (pib_mode + pib_permissions).
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import ClassVar
@@ -207,7 +208,8 @@ class PermissionFSM:
         # --- Transition table ---
         # Each state maps to a list of transitions, checked in order.
         # First matching guard wins. Transitions own their holdoff timers.
-        self._transitions: dict[State, list[tuple[Transition, callable]]] = {
+        Guard = Callable[[Reading, float], bool]
+        self._transitions: dict[State, list[tuple[Transition, Guard]]] = {
             State.SLEEP: [
                 # Startup: detect hardware already active. 2s holdoff so a
                 # single noisy reading at process start can't bypass the
@@ -403,7 +405,7 @@ class PermissionFSM:
                 self._pib_high_since = t
             elif t - self._pib_high_since >= holdoff:
                 if pib_abs > self.PIB_MAXED and abs(p1) > 200:
-                    jumped = self._jump_to_step(self._current_step() + abs(p1))
+                    jumped = self._jump_to_step(self._current_step() + int(abs(p1)))
                 else:
                     jumped = self._step_up()
                 if jumped:

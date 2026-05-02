@@ -110,6 +110,7 @@ uv run python -m pytest tests/                       # All tests
 uv run ruff check battery-coordinator/app/ tests/    # Lint
 uv run ruff format --check battery-coordinator/app/ tests/  # Format check
 uv run ruff format battery-coordinator/app/ tests/   # Apply format
+uv run mypy                                          # Type check
 ```
 
 ## Development workflow
@@ -121,7 +122,8 @@ uv run ruff format battery-coordinator/app/ tests/   # Apply format
 3. Run all tests: `uv run python -m pytest tests/`
 4. Run lint: `uv run ruff check battery-coordinator/app/ tests/`
 5. Run format check: `uv run ruff format --check battery-coordinator/app/ tests/` (or apply with `ruff format`)
-6. Commit (one focused change per commit, imperative-mood subject).
+6. Run type check: `uv run mypy`
+7. Commit (one focused change per commit, imperative-mood subject).
 
 ## Constants reference
 

@@ -28,5 +28,8 @@ jobs:
       - name: Format check (ruff format --check)
         run: uv run ruff format --check battery-coordinator/app/ tests/
 
+      - name: Type check (mypy)
+        run: uv run mypy
+
       - name: Tests (pytest)
         run: uv run python -m pytest tests/ -q
