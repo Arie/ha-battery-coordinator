@@ -188,14 +188,21 @@ class Config:
             errors.append(f"zen_soc_min must be 0–100 (got {self.zen_soc_min})")
         if not (0 <= self.zen_soc_max <= 100):
             errors.append(f"zen_soc_max must be 0–100 (got {self.zen_soc_max})")
-        if (
-            self.pib_soc_entities
-            and self.pib_power_entities
-            and len(self.pib_soc_entities) != len(self.pib_power_entities)
-        ):
+        # Both lists must be configured together. Setting only one makes
+        # device_io pad the other with zeros, which the brain reads as
+        # ghost 0%-SOC PIBs (or 0W phantom power) and over-corrects on.
+        soc_n = len(self.pib_soc_entities)
+        power_n = len(self.pib_power_entities)
+        if (soc_n > 0) != (power_n > 0):
             errors.append(
-                f"pib_soc_entities ({len(self.pib_soc_entities)}) and "
-                f"pib_power_entities ({len(self.pib_power_entities)}) must "
+                "pib_soc_entities and pib_power_entities must both be set "
+                "or both empty — configuring only one creates ghost PIBs "
+                "in the brain"
+            )
+        elif soc_n != power_n:
+            errors.append(
+                f"pib_soc_entities ({soc_n}) and "
+                f"pib_power_entities ({power_n}) must "
                 f"have the same length — the brain pairs them by index"
             )
         return errors

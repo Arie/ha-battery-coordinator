@@ -253,6 +253,40 @@ class TestValidate:
         errors = c.validate()
         assert any("ha_url is required" in e for e in errors), errors
 
+    def test_pib_power_only_rejected(self, clean_env, monkeypatch, tmp_path):
+        # Configuring pib_power_entities without pib_soc_entities makes
+        # device_io pad pib_socs with zeros — brain then sees ghost
+        # 0%-SOC PIBs and over/under-corrects. Reject the asymmetry up
+        # front instead of silently producing a broken Reading.
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+        path = tmp_path / "options.json"
+        path.write_text(json.dumps({
+            "zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z",
+            "pib_power_entities": ["sensor.pib_power_1"],
+        }))
+        c = Config(options_path=str(path))
+        errors = c.validate()
+        assert any(
+            "pib_soc_entities" in e and "pib_power_entities" in e
+            for e in errors
+        ), errors
+
+    def test_pib_soc_only_rejected(self, clean_env, monkeypatch, tmp_path):
+        # Mirror: SOC without power leaves the brain reading 0W per PIB
+        # (or evenly-split combined power) — also misleading. Reject.
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+        path = tmp_path / "options.json"
+        path.write_text(json.dumps({
+            "zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z",
+            "pib_soc_entities": ["sensor.pib_soc_1"],
+        }))
+        c = Config(options_path=str(path))
+        errors = c.validate()
+        assert any(
+            "pib_soc_entities" in e and "pib_power_entities" in e
+            for e in errors
+        ), errors
+
     def test_pib_lists_same_length_passes(self, clean_env, monkeypatch, tmp_path):
         # Same-length PIB lists shouldn't add their own validation errors.
         # Need SUPERVISOR_TOKEN since PIB entities trigger HA proxy mode.
