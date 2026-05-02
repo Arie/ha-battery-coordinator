@@ -12,6 +12,9 @@ uv.lock
 tests/plots/*
 tests/data/day_analysis.json
 
+# Runtime logs
+*.log
+
 # IDE
 .idea/
 .vscode/
