@@ -197,6 +197,7 @@ class PermissionFSM:
         self._last_step_up_t: float = -999
         self._last_zen_power: float = 0
         self._last_p1: float = 0
+        self._last_zen_soc: float = 0
         # Tracks whether the previous CHARGE-state tick was in NOM mode,
         # so the stepped→NOM boundary can ramp instead of jumping.
         self._charge_was_nom: bool = False
@@ -461,6 +462,7 @@ class PermissionFSM:
         pib_dir = "charging" if combined_pib > 50 else ("discharging" if combined_pib < -50 else "idle")
         self._last_zen_power = r.zen_power
         self._last_p1 = r.p1
+        self._last_zen_soc = r.zen_soc
 
         # Check transitions
         pib_mode, pib_permissions = self._check_transitions(r, pib_abs, t)
@@ -517,20 +519,27 @@ class PermissionFSM:
         #     Zen that's actively charging from surplus.
         # In both cases: if Zen is meaningfully charging AND grid is
         # exporting, leave it alone and let the FSM/step-up logic catch up.
+        # Carve-out: at the SOC ceiling, target=0 IS a real stop request
+        # (battery full), not a stepped-baseline 0. Don't suppress it —
+        # otherwise the brain stops talking to a saturated Zen until the
+        # CHARGE→SLEEP transition fires (up to FLIP_S=30s later).
         if (
             target == 0
             and self.state in (State.CHARGE, State.SLEEP)
             and self._last_zen_power > PILOT_W
             and self._last_p1 < self.P1_EXPORT
+            and self._last_zen_soc < self.zen_soc_max
         ):
             return target, False, False
         # Symmetric: don't kill a Zendure that's actively discharging into
-        # demand during the startup holdoff.
+        # demand during the startup holdoff. Same SOC carve-out — at the
+        # floor, target=0 is a real stop, not a startup-grace suppression.
         if (
             target == 0
             and self.state == State.SLEEP
             and self._last_zen_power < -PILOT_W
             and self._last_p1 > self.P1_IMPORT
+            and self._last_zen_soc > self.zen_soc_min
         ):
             return target, False, False
 

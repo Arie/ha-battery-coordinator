@@ -215,6 +215,66 @@ class TestDoesNotKillWorkingZendure:
             "from surplus (zen_power=2386, p1=-591). Would kill the Zen."
         )
 
+    def test_full_battery_during_charge_sends_standby(self):
+        """At zen_soc == zen_soc_max the SOC clamp pins target=0; the
+        'don't kill a working Zendure' guard must NOT suppress that send.
+        Battery is full — brain genuinely wants Zen to stop. The guard's
+        intent is 'this is a stepped-mode-baseline 0, not a real stop',
+        which doesn't apply when the SOC ceiling is the reason.
+
+        Without this carve-out, the brain stops talking to the Zendure
+        for as long as the CHARGE→SLEEP transition takes to fire (up to
+        FLIP_S = 30s) while a saturated battery is asked to keep
+        absorbing 800W+ of surplus."""
+        from brains.permission_fsm import State
+        brain = PermissionFSM()
+        brain.state = State.CHARGE
+        brain._zen_step_idx = 3  # 800W stepped baseline
+        brain.last_sent_target = 800
+        brain.last_send_time = 0
+
+        # zen_soc just hit 100%. PIBs not all in taper (one at 50%) so we
+        # stay in stepped mode → target = 800W → SOC clamp pins to 0.
+        d = brain.decide(
+            _steady_reading(p1=-1500, solar=3000,
+                            zen_power=800, zen_soc=100,
+                            pib1=400, pib2=400, pib1_soc=50, pib2_soc=50),
+            t=10,
+        )
+        assert d.target == 0, f"Expected SOC clamp to pin target=0, got {d.target}"
+        assert d.send is True, (
+            "Brain refused to send standby with zen_soc=100 while Zen still "
+            "drawing 800W from surplus. The 'don't kill a working Zendure' "
+            "safety guard incorrectly suppressed a legitimate battery-full "
+            "stop, leaving a saturated Zen pinned at its last commanded "
+            "target until the CHARGE→SLEEP transition eventually fires."
+        )
+
+    def test_empty_battery_during_discharge_sends_standby(self):
+        """Mirror of the SOC-max case: at zen_soc <= zen_soc_min the SOC
+        clamp pins discharge target=0; the symmetric SLEEP-startup safety
+        guard must not suppress that send when the battery is the reason."""
+        from brains.permission_fsm import State
+        brain = PermissionFSM()
+        brain.state = State.SLEEP
+        brain.last_sent_target = -800
+        brain.last_send_time = 0
+
+        # Zen drained to floor while SLEEP-state startup detection is
+        # still considering whether to adopt DISCHARGE. last_zen_power is
+        # negative (still discharging), p1 is positive (importing).
+        d = brain.decide(
+            _steady_reading(p1=400, zen_power=-800, zen_soc=10,
+                            pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+            t=10,
+        )
+        assert d.target == 0
+        assert d.send is True, (
+            "Brain refused to send standby at zen_soc=zen_soc_min while Zen "
+            "still discharging. SOC floor must override the SLEEP-startup "
+            "discharge-safety guard."
+        )
+
     def test_target_zero_with_zen_idle_can_still_send_standby(self):
         # Negative case: when Zen is already idle, target=0 with send=True
         # is still legitimate (brain re-confirms standby for a stalled Zen).
