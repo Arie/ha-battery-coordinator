@@ -403,6 +403,13 @@ class PermissionFSM:
         self._zen_step_idx = 0
         # Reset NOM-mode tracker so a new CHARGE entry starts fresh.
         self._charge_was_nom = False
+        # Reset the destination state's transition holdoff timers. Without
+        # this, a `_since` set during a previous visit to this state
+        # persists, and on re-entry `t - _since` may already exceed the
+        # holdoff — letting a transition fire after a single fresh tick
+        # instead of the documented sustained-signal window.
+        for trans, _ in self._transitions.get(self.state, []):
+            trans.reset()
 
     def _compute_target(self, r: Reading, pib_abs: float, t: float) -> int:
         """Compute Zendure target power for current state."""

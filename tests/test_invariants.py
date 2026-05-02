@@ -923,3 +923,54 @@ class TestP1Convergence:
             t=40,
         )
         assert d.target < 0, f"Should be discharging with 1000W deficit, target={d.target}"
+
+
+class TestTransitionTimersResetOnStateEntry:
+    """A transition's holdoff (`_since`) must reset each time the brain
+    enters the source state, not carry stale state from a prior visit.
+
+    Without the reset, leaving a state via a fast transition while a slow
+    transition was partway through its holdoff lets the slow one fire
+    prematurely on the next visit (it sees `t - _since` exceeding the
+    holdoff because _since was set during the previous visit).
+    """
+
+    def test_wake_holdoff_does_not_carry_over_between_visits(self):
+        from brains.permission_fsm import State
+        brain = PermissionFSM()
+
+        # Visit 1: arm SLEEP→CHARGE wake (WAKE_CHARGE_S=10s) for 5s of
+        # sustained P1 export — half the holdoff, so it shouldn't fire.
+        for tick in range(5):
+            brain.decide(
+                _steady_reading(p1=-500, zen_power=0, zen_soc=50,
+                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                t=tick,
+            )
+        assert brain.state == State.SLEEP
+
+        # Simulate having taken a different transition out of SLEEP and
+        # then returning. Direct manipulation skips the natural FSM path
+        # so the test stays focused on the timer-reset invariant rather
+        # than the choreography of getting back to SLEEP.
+        dummy = _steady_reading(p1=0, zen_soc=50, pib1_soc=50, pib2_soc=50)
+        brain.state = State.CHARGE
+        brain._init_step_for_new_state(dummy)
+        brain.state = State.SLEEP
+        brain._init_step_for_new_state(dummy)
+
+        # Re-arm the wake transition at t=6. With the reset: arms at t=6,
+        # fires at t=16. Without the reset: stale _since=0, fires at t=10.
+        for tick in range(6, 12):
+            brain.decide(
+                _steady_reading(p1=-500, zen_power=0, zen_soc=50,
+                                pib1=0, pib2=0, pib1_soc=50, pib2_soc=50),
+                t=tick,
+            )
+        assert brain.state == State.SLEEP, (
+            f"Wake-charge transition fired prematurely after SLEEP "
+            f"re-entry (state={brain.state.value}). The _since timer was "
+            "not reset on state entry — a stale ~11-second-old timestamp "
+            "from the previous SLEEP visit let the 10s holdoff appear "
+            "elapsed after only ~5s of fresh signal."
+        )
