@@ -25,15 +25,13 @@ Reference: [HomeWizard API docs](https://api-documentation.homewizard.com/docs/v
 
 ### HomeWizard PIB SOC entities (Home Assistant)
 
-The HW P1 `/api/batteries` endpoint doesn't expose per-PIB state of charge — that data only flows through HA's [HomeWizard integration](https://www.home-assistant.io/integrations/homewizard/). **Add the integration first** (Settings → Devices & services → Add Integration → HomeWizard). The integration auto-discovers HW devices on your LAN; if discovery doesn't find them you can enter the P1's IP manually.
-
-For each PIB the integration creates a `Plug-In Battery` device with sensors. With default device names you'll get:
+Install HA's [HomeWizard integration](https://www.home-assistant.io/integrations/homewizard/) — the add-on reads per-PIB SOC and power from the entities it creates. With default device names you'll get:
 
 - `sensor.plug_in_battery_state_of_charge` (PIB 1)
 - `sensor.plug_in_battery_state_of_charge_2` (PIB 2)
 - ... and so on for `_3`, `_4`
 
-If you renamed a PIB device, the entity ID will reflect the new name. Check **Settings → Devices & services → HomeWizard** to confirm the actual IDs and put them in the add-on's Configuration tab.
+If you renamed a PIB, check **Settings → Devices & services → HomeWizard** for the actual entity IDs and put them in the add-on's Configuration tab.
 
 ## Install as a Home Assistant Add-on
 
