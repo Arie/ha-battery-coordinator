@@ -17,13 +17,9 @@ profile battery-coordinator flags=(attach_disconnected,mediate_deleted) {
   # Add-on config
   /data/** r,
 
-  # Outbound TCP only (HTTP to Zendure, HTTPS to HW P1, HA API)
+  # Outbound network (TCP for HTTP/HTTPS, UDP for DNS)
   network inet tcp,
   network inet6 tcp,
-  network inet dgp,
-  network inet6 dgp,
-
-  # DNS resolution
   network inet udp,
   network inet6 udp,
 }

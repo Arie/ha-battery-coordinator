@@ -1,6 +1,6 @@
 [project]
 name = "ha-addon-battery-coordinator"
-version = "1.2.2"
+version = "1.2.3"
 description = "Coordinates Zendure battery with HomeWizard Plug-in Batteries for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.12"
