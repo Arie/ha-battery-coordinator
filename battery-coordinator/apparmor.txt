@@ -3,19 +3,27 @@
 profile battery-coordinator flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
+  # s6-overlay init system (HA add-on container lifecycle)
+  /init rix,
+  /bin/** rix,
+  /usr/bin/** rix,
+  /run/** rwk,
+  /etc/** r,
+
   # Python runtime
-  /usr/bin/python3* ix,
   /usr/lib/python3*/** r,
   /app/** r,
 
   # Add-on config
-  /data/options.json r,
+  /data/** r,
 
   # Outbound TCP only (HTTP to Zendure, HTTPS to HW P1, HA API)
   network inet tcp,
   network inet6 tcp,
+  network inet dgp,
+  network inet6 dgp,
 
-  # Deny write access to system paths
-  deny /proc/** w,
-  deny /sys/** w,
+  # DNS resolution
+  network inet udp,
+  network inet6 udp,
 }

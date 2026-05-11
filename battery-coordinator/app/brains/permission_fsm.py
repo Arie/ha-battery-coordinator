@@ -62,7 +62,7 @@ class PermissionFSM:
     AC_DISCHARGE = 2
 
     # Zendure stepped power levels (charge mode)
-    ZEN_STEPS: ClassVar[list[int]] = [0, 200, 400, 800, 1200, 1600, 2000, 2400]
+    ZEN_STEPS: ClassVar[list[int]] = [PILOT_W, 200, 400, 800, 1200, 1600, 2000, 2400]
 
     # PIB saturation thresholds for stepping. Defaults live in DEFAULTS so
     # config.py and the bare PermissionFSM() constructor see the same values.
@@ -276,7 +276,7 @@ class PermissionFSM:
                 # relay-click flip to discharge.
                 (
                     Transition(State.DISCHARGE, holdoff_s=self.FLIP_S, pib_mode="standby"),
-                    lambda r, pib_abs: pib_abs < 50 and r.p1 > abs(self.P1_EXPORT) and self._current_step() == 0,
+                    lambda r, pib_abs: pib_abs < 50 and r.p1 > abs(self.P1_EXPORT) and self._zen_step_idx == 0,
                 ),
             ],
             State.DISCHARGE: [
@@ -504,7 +504,7 @@ class PermissionFSM:
                 # tick; subsequent ticks use the full NOM value.
                 # Skip the clamp when current_step==0 (nothing to ramp from):
                 # the brain hasn't sent anything meaningful yet.
-                if not self._charge_was_nom and self._current_step() > 0:
+                if not self._charge_was_nom and self._zen_step_idx > 0:
                     target = min(target, self._current_step() + 400)
                 self._charge_was_nom = True
                 return target

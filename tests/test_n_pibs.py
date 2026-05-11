@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
 from brains.permission_fsm import PermissionFSM, _all_in_taper, _total_charge_cap
-from coordinator_logic import Reading
+from coordinator_logic import PILOT_W, Reading
 
 
 def _r(p1, pibs, pib_socs, *, zen_power=0, zen_soc=50, solar=0):
@@ -84,8 +84,8 @@ class TestBrainWithFourPibs:
             _r(p1=-500, pibs=[800, 800, 800, 240], pib_socs=[50, 50, 50, 97], zen_power=0, zen_soc=50, solar=4000),
             t=0,
         )
-        # NOM mode would target near-max charge; stepped mode starts at 0.
-        assert d.target == 0
+        # NOM mode would target near-max charge; stepped mode starts at PILOT_W.
+        assert d.target == PILOT_W
 
     def test_all_four_pibs_in_taper_switches_to_nom(self):
         brain = PermissionFSM()

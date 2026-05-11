@@ -1,3 +1,7 @@
+## 1.2.1
+
+- Bottom charge step is now PILOT_W (50W) instead of 0W. At 0W the brain sent flash-standby which cleared ac_mode — stepping back up after a passing cloud required a mode-switch relay click. At 50W the brain stays in charge mode (smartMode=1 RAM), so stepping back up is seamless. Saves one relay click per cloud event.
+
 ## 1.2.0
 
 - Security hardening: dropped `host_network` (addon is a pure HTTP client — Docker bridge NAT suffices), added AppArmor profile restricting the container to Python execution + config reads + outbound TCP, declared `hassio_role: default` (minimum privilege). Expected HA security rating improvement from ~3 to ~5.

@@ -1030,6 +1030,38 @@ class TestChargeFlipSuppressedWhileSteppingDown:
             "causing the P1 import — should step down, not relay-click."
         )
 
+    def test_bottom_step_is_pilot_not_zero(self):
+        """Stepping all the way down should land at PILOT_W (50W), not 0W.
+        At 0W the brain sends standby (smartMode=0), which clears ac_mode.
+        When solar returns and the brain steps back up, the cleared ac_mode
+        forces a mode-switch relay click. At PILOT_W the brain sends
+        charge(50) which keeps ac_mode=AC_CHARGE — stepping back up is
+        seamless.
+
+        Production observation 2026-05-11 18:25: cloud caused step-down
+        to 0 → standby → cloud cleared → step up with mode switch.
+        Avoidable relay click."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 2  # step = 400W
+
+        # Step all the way down.
+        for tick in range(30):
+            brain.decide(
+                _steady_reading(
+                    p1=+500, solar=1500, zen_power=400, zen_soc=60, pib1=8, pib2=8, pib1_soc=50, pib2_soc=50
+                ),
+                t=tick,
+            )
+
+        from coordinator_logic import PILOT_W
+
+        assert brain._current_step() == PILOT_W, (
+            f"Bottom step is {brain._current_step()}W, expected {PILOT_W}W. "
+            "Step 0W triggers standby → clears ac_mode → relay click on "
+            "step-up. PILOT_W keeps the Zen in charge mode."
+        )
+
 
 class TestDischargeHelpOverDischargeHoldoff:
     """The DISCHARGE_HELP → DISCHARGE bail on `r.p1 < P1_OVER_DISCHARGE`
