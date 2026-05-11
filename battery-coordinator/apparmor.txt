@@ -3,14 +3,32 @@
 profile battery-coordinator flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
-  # s6-overlay init system (HA add-on container lifecycle)
-  /init rix,
-  /bin/** rix,
-  /usr/bin/** rix,
-  /run/** rwk,
-  /etc/** r,
+  # Capabilities
+  file,
+  signal (send) set=(kill,term,int,hup,cont),
 
-  # Python runtime
+  # S6-Overlay v3
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+
+  # Legacy S6 paths (v2 compat)
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+
+  # Runtime
+  /run/{,**} rwk,
+  /dev/tty rw,
+
+  # Bashio
+  /usr/lib/bashio/** ix,
+  /tmp/** rwk,
+
+  # Python runtime + app code
   /usr/lib/python3*/** r,
   /app/** r,
 

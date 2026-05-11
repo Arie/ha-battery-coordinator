@@ -1,3 +1,7 @@
+## 1.2.4
+
+- AppArmor profile rewritten from the official HA add-on template. Previous attempts missed s6-overlay v3 paths (`/package/**`, `/command/**`) and the `file,` capability.
+
 ## 1.2.1
 
 - Bottom charge step is now PILOT_W (50W) instead of 0W. At 0W the brain sent flash-standby which cleared ac_mode — stepping back up after a passing cloud required a mode-switch relay click. At 50W the brain stays in charge mode (smartMode=1 RAM), so stepping back up is seamless. Saves one relay click per cloud event.
