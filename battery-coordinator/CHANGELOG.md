@@ -1,3 +1,7 @@
+## 1.2.0
+
+- Security hardening: dropped `host_network` (addon is a pure HTTP client — Docker bridge NAT suffices), added AppArmor profile restricting the container to Python execution + config reads + outbound TCP, declared `hassio_role: default` (minimum privilege). Expected HA security rating improvement from ~3 to ~5.
+
 ## 1.1.2
 
 - Suppress CHARGE→DISCHARGE flip while Zen is still at a positive step. When a cloud halves solar, the Zendure charge step is itself the cause of grid import — the correct response is stepping down (2400→2000→1600→...→0), not a relay-click flip to discharge. The flip guard now requires `current_step == 0` before firing. At step 0 with sustained import, the flip fires normally (genuine load > solar). Saves one relay click per cloud event.

@@ -1,0 +1,21 @@
+#include <tunables/global>
+
+profile battery-coordinator flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Python runtime
+  /usr/bin/python3* ix,
+  /usr/lib/python3*/** r,
+  /app/** r,
+
+  # Add-on config
+  /data/options.json r,
+
+  # Outbound TCP only (HTTP to Zendure, HTTPS to HW P1, HA API)
+  network inet tcp,
+  network inet6 tcp,
+
+  # Deny write access to system paths
+  deny /proc/** w,
+  deny /sys/** w,
+}
