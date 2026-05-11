@@ -1,5 +1,5 @@
 name: Battery Coordinator
-version: "1.2.1"
+version: "1.2.2"
 slug: battery-coordinator
 description: Coordinates a Zendure 2400 AC battery with HomeWizard Plug-in Batteries against a HomeWizard P1 meter — prevents oscillation, cross-charging, and grid bleed.
 url: "https://github.com/Arie/ha-battery-coordinator"
