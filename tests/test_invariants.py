@@ -997,6 +997,40 @@ class TestTransitionTimersResetOnStateEntry:
         )
 
 
+class TestChargeFlipSuppressedWhileSteppingDown:
+    """When PIBs are idle and P1 is importing during CHARGE, but the
+    import is caused by Zen absorbing more than the available solar at
+    the current step, the brain should step down toward 0 instead of
+    flipping to DISCHARGE.
+
+    Production bug 2026-05-02 18:00: cloud halved solar while Zen was at
+    step 1200W. Brain stepped down 2400→2000→1600→1200 but the CHARGE→
+    DISCHARGE flip (FLIP_S=30s) won the race — fired a mode-switch relay
+    click to discharge at 50W, immediately over-discharged, and flipped
+    back to CHARGE 35s later. A wasted relay click."""
+
+    def test_no_flip_while_zen_step_above_zero(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 4  # step = 1200W
+
+        # Cloud scenario: solar dropped, Zen at +1200W is the cause of
+        # import. PIBs idle (charge-only, nothing to absorb).
+        for tick in range(int(PermissionFSM.FLIP_S) + 5):
+            brain.decide(
+                _steady_reading(
+                    p1=+250, solar=1500, zen_power=1200, zen_soc=56, pib1=8, pib2=8, pib1_soc=50, pib2_soc=50
+                ),
+                t=tick,
+            )
+
+        assert brain.state.value != "DISCHARGE", (
+            f"Brain flipped to DISCHARGE while Zen was stepping down "
+            f"(now at step {brain._current_step()}W). The Zen charge was "
+            "causing the P1 import — should step down, not relay-click."
+        )
+
+
 class TestDischargeHelpOverDischargeHoldoff:
     """The DISCHARGE_HELP → DISCHARGE bail on `r.p1 < P1_OVER_DISCHARGE`
     must filter the 1–2-tick PIB activation transient. The HW P1 meter's

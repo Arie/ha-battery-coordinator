@@ -1,3 +1,7 @@
+## 1.1.2
+
+- Suppress CHARGE→DISCHARGE flip while Zen is still at a positive step. When a cloud halves solar, the Zendure charge step is itself the cause of grid import — the correct response is stepping down (2400→2000→1600→...→0), not a relay-click flip to discharge. The flip guard now requires `current_step == 0` before firing. At step 0 with sustained import, the flip fires normally (genuine load > solar). Saves one relay click per cloud event.
+
 ## 1.1.1
 
 - Filter PIB activation transient out of the DISCHARGE_HELP over-discharge bail. The HW P1 meter's autonomous PIB controller slams from 0 to ~max in one tick when DISCHARGE_HELP unlocks them, briefly overshooting load by ~1.6 kW and pulling P1 negative for 1-2 ticks. Pre-fix, the brain bailed to DISCHARGE on that single-tick spike and re-entered HELP 15s later — observed 22 state bounces in 5 minutes under heavy EV load (production 2026-05-01). Added 3s holdoff on `r.p1 < P1_OVER_DISCHARGE`; real load drops still exit, just 3s later.
