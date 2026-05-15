@@ -1130,6 +1130,63 @@ class TestStepJumpDown:
         )
 
 
+class TestNomNotEnteredWhilePibsHaveCapacity:
+    """NOM mode should only fire when PIBs are truly near their limit
+    (97%+ where per-PIB cap drops to ≤240W). At 95-96% PIBs still have
+    ~480W each — stepped mode should handle that.
+
+    Production observation 2026-05-15 14:33: PIBs at 98/95% SOC with
+    combined cap=660W. Brain entered NOM and fought with PIBs' own
+    zero-tracking, oscillating target every 2-3s."""
+
+    def test_stays_stepped_at_95_percent(self):
+        """PIB at 95% has 480W cap — should stay in stepped mode."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+
+        d = brain.decide(
+            _steady_reading(
+                p1=-200,
+                solar=2000,
+                zen_power=400,
+                zen_soc=50,
+                pib1=400,
+                pib2=400,
+                pib1_soc=95,
+                pib2_soc=95,
+            ),
+            t=0,
+        )
+
+        assert d.target in PermissionFSM.ZEN_STEPS, (
+            f"Target {d.target}W is a NOM value, not a step. PIBs at 95% "
+            "still have 480W cap each — should stay in stepped mode."
+        )
+
+    def test_enters_nom_at_97_percent(self):
+        """PIB at 97% has 240W cap — NOM is appropriate."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+
+        d = brain.decide(
+            _steady_reading(
+                p1=-200,
+                solar=2000,
+                zen_power=400,
+                zen_soc=50,
+                pib1=200,
+                pib2=200,
+                pib1_soc=97,
+                pib2_soc=97,
+            ),
+            t=0,
+        )
+
+        assert d.target not in PermissionFSM.ZEN_STEPS or d.target == max(50, 400 - (-200)), (
+            f"Target {d.target}W — expected NOM (zen_power - p1 = 600) at 97% SOC."
+        )
+
+
 class TestDischargeHelpOverDischargeHoldoff:
     """The DISCHARGE_HELP → DISCHARGE bail on `r.p1 < P1_OVER_DISCHARGE`
     must filter the 1–2-tick PIB activation transient. The HW P1 meter's

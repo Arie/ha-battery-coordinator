@@ -76,7 +76,7 @@ class PermissionFSM:
         "pib_high_w": 1200,
         "pib_maxed_w": 1400,
         "pib_low_w": 200,
-        "pib_taper_cap_w": 600,
+        "pib_taper_cap_w": 300,
         "nom_deadband_w": 10,
         "p1_export_w": -100,
         "p1_import_w": 200,

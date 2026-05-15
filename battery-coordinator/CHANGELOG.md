@@ -1,3 +1,7 @@
+## 1.2.6
+
+- Lower PIB_TAPER_CAP from 600 to 300. At 95-96% SOC PIBs still have ~480W capacity each — the brain was entering NOM mode and fighting with the PIBs' own zero-tracking, oscillating targets every 2-3s. Now NOM only fires at 97%+ (per-PIB cap ≤240W) where PIBs are genuinely near their limit.
+
 ## 1.2.5
 
 - Step-down jump: symmetric to the existing step-up jump. When PIBs are idle and P1 is heavily importing (>200W for 3s+) in CHARGE, the brain now jumps the step down in one tick (`current_step - P1`) instead of walking one step at a time at 5s/step. At step 1600 with P1=+1600 (EV turned on), jumps to PILOT_W in 1 tick instead of 25s of grid import.
