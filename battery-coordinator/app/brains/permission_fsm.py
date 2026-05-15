@@ -437,7 +437,12 @@ class PermissionFSM:
             if self._pib_low_since is None:
                 self._pib_low_since = t
             elif t - self._pib_low_since >= (self.STEP_HOLDOFF_FAST if p1_contradicts else self.STEP_HOLDOFF):
-                self._step_down()
+                if p1_contradicts and p1 > 200:
+                    self._jump_to_step(max(PILOT_W, self._current_step() - int(p1)))
+                    self._pib_low_since = None
+                    self._pib_high_since = None
+                else:
+                    self._step_down()
         else:
             self._pib_low_since = None
 

@@ -1063,6 +1063,73 @@ class TestChargeFlipSuppressedWhileSteppingDown:
         )
 
 
+class TestStepJumpDown:
+    """Symmetric to the existing step-up jump: when PIBs are idle and P1 is
+    heavily importing in CHARGE, the brain should jump the step down in one
+    tick instead of walking 1600→1200→800→400→200→50 at 5s/step.
+
+    Production observation 2026-05-12 08:43: EV turned on, P1 spiked to
+    +1600W while Zen was at step 1600. Brain took 25s walking down while
+    pulling 1600W from the grid."""
+
+    def test_jump_down_on_heavy_import(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 5  # step = 1600W
+        brain._last_step_up_t = -999
+
+        # Sustained heavy import (EV turned on). PIBs idle. Needs:
+        # 3s p1_contradicts debounce + 5s STEP_HOLDOFF_FAST = fires at ~t=5.
+        for tick in range(7):
+            brain.decide(
+                _steady_reading(
+                    p1=+1600,
+                    solar=4000,
+                    zen_power=1600,
+                    zen_soc=50,
+                    pib1=8,
+                    pib2=8,
+                    pib1_soc=50,
+                    pib2_soc=50,
+                ),
+                t=tick,
+            )
+
+        from coordinator_logic import PILOT_W
+
+        assert brain._current_step() <= 200, (
+            f"Step is {brain._current_step()}W after 7s of +1600W import. "
+            f"Should have jumped down near {PILOT_W}W, not walked slowly."
+        )
+
+    def test_moderate_import_partial_jump(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 5  # step = 1600W
+        brain._last_step_up_t = -999
+
+        # Moderate import — should jump partway, not all the way down.
+        for tick in range(7):
+            brain.decide(
+                _steady_reading(
+                    p1=+600,
+                    solar=4000,
+                    zen_power=1600,
+                    zen_soc=50,
+                    pib1=8,
+                    pib2=8,
+                    pib1_soc=50,
+                    pib2_soc=50,
+                ),
+                t=tick,
+            )
+
+        step = brain._current_step()
+        assert step <= 1200 and step >= 400, (
+            f"Step is {step}W after +600W import at step 1600. Expected partial jump to ~800-1000W range."
+        )
+
+
 class TestDischargeHelpOverDischargeHoldoff:
     """The DISCHARGE_HELP → DISCHARGE bail on `r.p1 < P1_OVER_DISCHARGE`
     must filter the 1–2-tick PIB activation transient. The HW P1 meter's

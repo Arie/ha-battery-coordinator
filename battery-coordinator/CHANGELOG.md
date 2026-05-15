@@ -1,3 +1,7 @@
+## 1.2.5
+
+- Step-down jump: symmetric to the existing step-up jump. When PIBs are idle and P1 is heavily importing (>200W for 3s+) in CHARGE, the brain now jumps the step down in one tick (`current_step - P1`) instead of walking one step at a time at 5s/step. At step 1600 with P1=+1600 (EV turned on), jumps to PILOT_W in 1 tick instead of 25s of grid import.
+
 ## 1.2.4
 
 - AppArmor profile rewritten from the official HA add-on template. Previous attempts missed s6-overlay v3 paths (`/package/**`, `/command/**`) and the `file,` capability.
