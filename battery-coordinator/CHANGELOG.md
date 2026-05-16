@@ -1,3 +1,7 @@
+## 1.2.7
+
+- Fix CHARGE→DISCHARGE flip stuck in NOM mode. When NOM is at its floor (PILOT_W) with P1 importing, PIBs in deep taper may briefly absorb 120W on cloud-clear moments — resetting the `pib_abs < 50` holdoff. Brain was stuck at 50W for 16+ minutes importing 600-4800W from grid. Bypass the pib_abs check when in NOM mode (`_charge_was_nom`); P1 importing + step at floor + 30s sustained is sufficient.
+
 ## 1.2.6
 
 - Lower PIB_TAPER_CAP from 600 to 300. At 95-96% SOC PIBs still have ~480W capacity each — the brain was entering NOM mode and fighting with the PIBs' own zero-tracking, oscillating targets every 2-3s. Now NOM only fires at 97%+ (per-PIB cap ≤240W) where PIBs are genuinely near their limit.

@@ -270,13 +270,19 @@ class PermissionFSM:
                         all(s >= 99 for s in r.pib_socs) and r.zen_soc >= self.zen_soc_max - 1 and r.p1 < self.P1_IMPORT
                     ),
                 ),
-                # Surplus gone → discharge. Suppressed while Zen is still at
-                # a positive step — the Zen charge itself is causing the
-                # import, so the correct response is stepping down, not a
-                # relay-click flip to discharge.
+                # Surplus gone → discharge. In stepped mode, suppressed while
+                # step > 0 (Zen charge is causing the import — step down
+                # instead of relay-click). In NOM mode at the floor
+                # (_charge_was_nom), step_idx is stale from before NOM took
+                # over — bypass both pib_abs and step_idx checks; only
+                # sustained P1 import matters.
                 (
                     Transition(State.DISCHARGE, holdoff_s=self.FLIP_S, pib_mode="standby"),
-                    lambda r, pib_abs: pib_abs < 50 and r.p1 > abs(self.P1_EXPORT) and self._zen_step_idx == 0,
+                    lambda r, pib_abs: (
+                        (pib_abs < 50 or self._charge_was_nom)
+                        and r.p1 > abs(self.P1_EXPORT)
+                        and (self._zen_step_idx == 0 or self._charge_was_nom)
+                    ),
                 ),
             ],
             State.DISCHARGE: [

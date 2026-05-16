@@ -1130,6 +1130,50 @@ class TestStepJumpDown:
         )
 
 
+class TestNomFloorFlipsToDischarge:
+    """When NOM mode is at its floor (PILOT_W) and P1 is importing, the
+    CHARGE→DISCHARGE flip should fire even if PIBs are briefly absorbing
+    their taper remainder (120-240W). The pib_abs<50 check was designed
+    for stepped mode; in NOM at the floor it prevents flipping for minutes.
+
+    Production bug 2026-05-15 18:51–19:07: brain stuck in CHARGE at 50W
+    with P1=+600 to +4800 for 16 minutes because PIBs at 98/100% SOC
+    briefly absorbed 120W during cloud-clear moments, resetting the
+    flip timer."""
+
+    def test_flip_fires_in_nom_with_stale_step_idx(self):
+        """The real bug: step_idx is stale from before NOM took over.
+        Brain was at step 3 (800W) in stepped mode, PIBs entered taper,
+        NOM kicked in. step_idx frozen at 3. NOM returns PILOT_W (floor)
+        because P1 is importing heavily. Flip guard checked step_idx==0
+        which was False — brain stuck for 16+ minutes."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("CHARGE")
+        brain._zen_step_idx = 3  # stale from stepped mode before NOM
+        brain._charge_was_nom = True
+
+        for tick in range(int(PermissionFSM.FLIP_S) + 5):
+            brain.decide(
+                _steady_reading(
+                    p1=+3000,
+                    solar=1200,
+                    zen_power=50,
+                    zen_soc=90,
+                    pib1=9,
+                    pib2=8,
+                    pib1_soc=98,
+                    pib2_soc=100,
+                ),
+                t=tick,
+            )
+
+        assert brain.state.value == "DISCHARGE", (
+            f"Expected DISCHARGE after {PermissionFSM.FLIP_S}s of P1=+3000 "
+            f"in NOM at floor with stale step_idx=3, got {brain.state.value}. "
+            "In NOM mode, step_idx is irrelevant — P1 importing is the signal."
+        )
+
+
 class TestNomNotEnteredWhilePibsHaveCapacity:
     """NOM mode should only fire when PIBs are truly near their limit
     (97%+ where per-PIB cap drops to ≤240W). At 95-96% PIBs still have
