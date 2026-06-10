@@ -500,7 +500,8 @@ class TestPIBModeHeartbeat:
 
 class TestZenStandbyHeartbeat:
     """Zen target=0 (flash-standby) should also be re-asserted periodically,
-    not just sent once on entry."""
+    not just sent once on entry. Idle states (SLEEP, PIB_DISCHARGE) use a
+    longer heartbeat (300s) so the device can actually deep-sleep."""
 
     def test_heartbeats_in_pib_discharge(self):
         brain = PermissionFSM()
@@ -518,21 +519,43 @@ class TestZenStandbyHeartbeat:
         assert d.send is True, "First standby send after PIB_DISCHARGE entry"
         brain.mark_sent(d.target, t=10)
 
-        # Between first send and heartbeat: silent.
-        for tick in range(11, 39):
+        # Between first send and idle heartbeat (300s): silent.
+        for tick in range(11, 309):
             d = brain.decide(
                 _steady_reading(p1=500, zen_power=0, zen_soc=10, pib1=-200, pib2=-200, pib1_soc=40, pib2_soc=40),
                 t=tick,
             )
             assert d.send is False, f"Spurious send at t={tick} (only {tick - 10}s elapsed since standby)"
 
-        # Past 30s: heartbeat re-asserts.
+        # Past 300s: idle heartbeat re-asserts.
         d = brain.decide(
             _steady_reading(p1=500, zen_power=0, zen_soc=10, pib1=-200, pib2=-200, pib1_soc=40, pib2_soc=40),
-            t=42,
+            t=312,
         )
         assert d.target == 0 and d.send is True, (
-            f"Heartbeat should re-assert standby at 30s+, got target={d.target} send={d.send}"
+            f"Idle heartbeat should re-assert standby at 300s+, got target={d.target} send={d.send}"
+        )
+
+    def test_charge_still_uses_short_heartbeat(self):
+        """In CHARGE with target=0 (SOC clamp), the heartbeat interval should
+        stay at 30s — device is still warm in RAM, not deep-sleeping."""
+        from brains.permission_fsm import State
+
+        brain = PermissionFSM()
+        brain.state = State.CHARGE
+        brain._zen_step_idx = 0
+        brain.last_sent_target = 0
+        brain.last_send_time = 0
+        brain.last_ac_mode = PermissionFSM.AC_CHARGE
+
+        # At 31s elapsed in CHARGE with target=0, heartbeat should fire.
+        d = brain.decide(
+            _steady_reading(p1=0, zen_power=0, zen_soc=100, pib1=0, pib2=0, pib1_soc=99, pib2_soc=99),
+            t=31,
+        )
+        assert d.target == 0 and d.send is True, (
+            f"CHARGE heartbeat should fire at 30s, got target={d.target} send={d.send}. "
+            "Active states must use the short heartbeat interval."
         )
 
     def test_no_spurious_send_at_startup(self):

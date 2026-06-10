@@ -102,6 +102,9 @@ class PermissionFSM:
     # external app toggle, integration refresh) self-heals within a bounded
     # window. Idempotent commands; safe to repeat.
     PIB_HEARTBEAT_S = 300  # re-send pib_mode/permissions every 5 min
+    ZEN_HEARTBEAT_S = 30  # re-send Zen target every 30s (active states)
+    ZEN_IDLE_HEARTBEAT_S = 300  # SLEEP/PIB_DISCHARGE: device is in flash
+    # standby which persists across reboots — no need to poke it every 30s
 
     # P1 thresholds
     P1_EXPORT = DEFAULTS["p1_export_w"]
@@ -630,12 +633,15 @@ class PermissionFSM:
         if elapsed < 5.0:
             return target, False, False
 
-        # Heartbeat re-asserts the last command, including target=0
-        # (flash-standby), so if the device drifted out of standby — silent
-        # PUT failure, firmware reboot, external app — we recover within 30s.
+        # Heartbeat re-asserts the last command so drift self-heals.
+        # In SLEEP/PIB_DISCHARGE at target=0 the device is in flash standby
+        # (persists across reboots) — use a longer interval so we don't
+        # wake it from deep sleep every 30s.
         # `last_sent_target is not None` keeps startup quiet: brain has no
         # prior state to re-assert.
-        heartbeat = elapsed >= 30 and self.last_sent_target is not None
+        zen_idle = self.state in (State.SLEEP, State.PIB_DISCHARGE) and target == 0
+        heartbeat_s = self.ZEN_IDLE_HEARTBEAT_S if zen_idle else self.ZEN_HEARTBEAT_S
+        heartbeat = elapsed >= heartbeat_s and self.last_sent_target is not None
         send = heartbeat or change >= 50
         return target, send, urgent
 

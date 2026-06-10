@@ -1,3 +1,7 @@
+## 1.2.8
+
+- Fix Zendure staying in RAM (smartMode=1) during SLEEP/PIB_DISCHARGE. The 30s Zen heartbeat was sending `hold_zero` (RAM) every tick, undoing the initial flash standby within 30 seconds. Now the heartbeat dispatch is state-based: SLEEP/PIB_DISCHARGE always send `standby` (smartMode=0, flash deep-sleep), active states (CHARGE etc.) send `hold_zero` (RAM, warm idle). Heartbeat interval extended to 300s for idle states so the device can actually deep-sleep between pokes.
+
 ## 1.2.7
 
 - Fix CHARGE→DISCHARGE flip stuck in NOM mode. When NOM is at its floor (PILOT_W) with P1 importing, PIBs in deep taper may briefly absorb 120W on cloud-clear moments — resetting the `pib_abs < 50` holdoff. Brain was stuck at 50W for 16+ minutes importing 600-4800W from grid. Bypass the pib_abs check when in NOM mode (`_charge_was_nom`); P1 importing + step at floor + 30s sustained is sufficient.

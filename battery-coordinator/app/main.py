@@ -18,7 +18,7 @@ import time
 from datetime import datetime
 
 import aiohttp
-from brains.permission_fsm import PermissionFSM
+from brains.permission_fsm import PermissionFSM, State
 from config import Config
 from device_io import DeviceIO
 
@@ -99,12 +99,7 @@ async def main() -> None:
                     brain.mark_sent(d.target, t)
                     sent = f" SENT discharge {abs(d.target)}W" + (" (mode switch)" if mode_switch else "")
                 elif d.target == 0:
-                    # First entry into target=0 (last_ac_mode still set
-                    # from a prior charge/discharge) → flash standby so
-                    # the device deep-sleeps across reboots. Subsequent
-                    # heartbeat re-assertions → RAM-only hold_zero, to
-                    # avoid wearing flash with ~2880 writes/day.
-                    if brain.last_ac_mode is not None:
+                    if brain.state in (State.SLEEP, State.PIB_DISCHARGE):
                         ok = await io.zendure.standby(session)
                         sent = " SENT standby"
                     else:
