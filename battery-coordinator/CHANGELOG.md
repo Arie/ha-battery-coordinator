@@ -1,3 +1,7 @@
+## 1.2.9
+
+- Detect Zendure stuck at 0W output. After a power cut the inverter can accept commands (API returns success) but produce no output, leaving the brain sending discharge targets into a void while importing from grid. After 60s of sustained 0W output despite active discharge commands, the brain falls back to PIB_DISCHARGE so the PIBs can cover the load (~1600W). The stuck timer accumulates across DISCHARGE↔DISCHARGE_HELP bouncing — the 15s state ping-pong no longer resets detection. Logs `(Zendure unresponsive — falling back to PIBs)` on the state transition.
+
 ## 1.2.8
 
 - Fix Zendure staying in RAM (smartMode=1) during SLEEP/PIB_DISCHARGE. The 30s Zen heartbeat was sending `hold_zero` (RAM) every tick, undoing the initial flash standby within 30 seconds. Now the heartbeat dispatch is state-based: SLEEP/PIB_DISCHARGE always send `standby` (smartMode=0, flash deep-sleep), active states (CHARGE etc.) send `hold_zero` (RAM, warm idle). Heartbeat interval extended to 300s for idle states so the device can actually deep-sleep between pokes.

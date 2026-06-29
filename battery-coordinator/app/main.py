@@ -139,7 +139,10 @@ async def main() -> None:
             # State transition → its own INFO line for easy grep.
             state_changed = d.zone != prev_state
             if state_changed:
-                log.info(f"State: {prev_state or '∅'} → {d.zone}")
+                reason = ""
+                if d.zone == "PIB_DISCHARGE" and zen.soc > brain.zen_soc_min:
+                    reason = " (Zendure unresponsive — falling back to PIBs)"
+                log.info(f"State: {prev_state or '∅'} → {d.zone}{reason}")
                 prev_state = d.zone
 
             # Promote the per-tick line to INFO only when something interesting

@@ -128,6 +128,9 @@ class PermissionFSM:
     # NOM send deadband
     NOM_DEADBAND = DEFAULTS["nom_deadband_w"]
 
+    # Stuck detection — Zen accepts commands but produces no output
+    ZEN_STUCK_S = 60
+
     def __init__(
         self,
         max_charge_w: int = 2400,
@@ -207,6 +210,11 @@ class PermissionFSM:
         # Tracks whether the previous CHARGE-state tick was in NOM mode,
         # so the stepped→NOM boundary can ramp instead of jumping.
         self._charge_was_nom: bool = False
+        # Stuck detection: Zen accepts commands but produces no output.
+        # Tracked across states so DISCHARGE↔DISCHARGE_HELP bouncing
+        # doesn't reset the timer.
+        self._zen_stuck_since: float | None = None
+        self._zen_is_stuck: bool = False
 
         # --- Transition table ---
         # Each state maps to a list of transitions, checked in order.
@@ -308,6 +316,15 @@ class PermissionFSM:
                     Transition(State.SLEEP, holdoff_s=0, pib_mode="standby"),
                     lambda r, _: r.zen_soc <= self.zen_soc_min and all(s <= 1 for s in r.pib_socs),
                 ),
+                # Zendure unresponsive — commands landing but no output.
+                # Uses _zen_is_stuck (tracked outside transition table so
+                # DISCHARGE↔DISCHARGE_HELP bouncing doesn't reset the timer).
+                (
+                    Transition(
+                        State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]
+                    ),
+                    lambda r, _: self._zen_is_stuck and any(s > 1 for s in r.pib_socs),
+                ),
                 # Zendure maxed → wake PIBs to help
                 (
                     Transition(
@@ -350,6 +367,13 @@ class PermissionFSM:
                         State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]
                     ),
                     lambda r, _: r.zen_soc <= self.zen_soc_min,
+                ),
+                # Zendure unresponsive (same as DISCHARGE above)
+                (
+                    Transition(
+                        State.PIB_DISCHARGE, holdoff_s=0, pib_mode="zero", pib_permissions=["discharge_allowed"]
+                    ),
+                    lambda r, _: self._zen_is_stuck and any(s > 1 for s in r.pib_socs),
                 ),
             ],
             State.PIB_DISCHARGE: [
@@ -487,13 +511,12 @@ class PermissionFSM:
     def _init_step_for_new_state(self) -> None:
         """Initialise the Zendure step on entering a new state. Default 0."""
         self._zen_step_idx = 0
-        # Reset NOM-mode tracker so a new CHARGE entry starts fresh.
         self._charge_was_nom = False
-        # Reset the destination state's transition holdoff timers. Without
-        # this, a `_since` set during a previous visit to this state
-        # persists, and on re-entry `t - _since` may already exceed the
-        # holdoff — letting a transition fire after a single fresh tick
-        # instead of the documented sustained-signal window.
+        # Preserve the stuck timer across DISCHARGE↔DISCHARGE_HELP bounces
+        # so it accumulates to 60s despite the state ping-pong.
+        if self.state not in (State.DISCHARGE, State.DISCHARGE_HELP):
+            self._zen_stuck_since = None
+            self._zen_is_stuck = False
         for trans, _ in self._transitions.get(self.state, []):
             trans.reset()
 
@@ -546,6 +569,22 @@ class PermissionFSM:
         self._last_zen_power = r.zen_power
         self._last_p1 = r.p1
         self._last_zen_soc = r.zen_soc
+
+        # Stuck detection: Zen commanded to discharge but producing nothing.
+        # Tracked outside the transition table so DISCHARGE↔DISCHARGE_HELP
+        # bouncing doesn't reset the timer on each state entry.
+        zen_should_output = (
+            self.state in (State.DISCHARGE, State.DISCHARGE_HELP)
+            and self.last_sent_target is not None
+            and self.last_sent_target < -PILOT_W
+        )
+        if zen_should_output and abs(r.zen_power) < PILOT_W:
+            if self._zen_stuck_since is None:
+                self._zen_stuck_since = t
+            self._zen_is_stuck = (t - self._zen_stuck_since) >= self.ZEN_STUCK_S
+        else:
+            self._zen_stuck_since = None
+            self._zen_is_stuck = False
 
         # Check transitions
         pib_mode, pib_permissions = self._check_transitions(r, pib_abs, t)

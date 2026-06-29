@@ -1309,3 +1309,104 @@ class TestDischargeHelpOverDischargeHoldoff:
             f"{brain.state.value}. A real load drop must still trigger "
             "the bail, just with a small holdoff to filter PIB transients."
         )
+
+
+class TestZenStuckFallback:
+    """When the Zendure accepts commands but produces no output for 60s+,
+    the brain should fall back to PIB_DISCHARGE instead of bouncing
+    DISCHARGE↔DISCHARGE_HELP uselessly.
+
+    Production incident 2026-06-29: power cut left the Zendure stuck at
+    0W output. Brain sent discharge commands for 2+ hours, importing
+    ~600W from grid the entire time while PIBs were available at 94%."""
+
+    def test_discharge_falls_back_after_60s(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE")
+        brain.last_sent_target = -600
+        brain.last_send_time = 0
+
+        # 65 ticks of Zen at 0W despite discharge commands.
+        for tick in range(65):
+            brain.decide(
+                _steady_reading(p1=600, zen_power=0, zen_soc=94, pib1=0, pib2=0, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+
+        assert brain.state.value == "PIB_DISCHARGE", (
+            f"Expected PIB_DISCHARGE after 60s of Zen unresponsive, "
+            f"got {brain.state.value}. Brain should fall back to PIBs."
+        )
+
+    def test_discharge_help_falls_back_after_60s(self):
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE_HELP")
+        brain.last_sent_target = -2400
+        brain.last_send_time = 0
+
+        for tick in range(65):
+            brain.decide(
+                _steady_reading(p1=3000, zen_power=0, zen_soc=94, pib1=-800, pib2=-800, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+
+        assert brain.state.value == "PIB_DISCHARGE", (
+            f"Expected PIB_DISCHARGE after 60s of Zen unresponsive in DISCHARGE_HELP, got {brain.state.value}."
+        )
+
+    def test_no_fallback_when_zen_responds(self):
+        """Normal discharge — Zen produces output. No fallback."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE")
+        brain.last_sent_target = -600
+        brain.last_send_time = 0
+
+        for tick in range(65):
+            brain.decide(
+                _steady_reading(p1=50, zen_power=-600, zen_soc=80, pib1=0, pib2=0, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+
+        assert brain.state.value == "DISCHARGE", (
+            f"Zen is responding normally — should stay in DISCHARGE, got {brain.state.value}."
+        )
+
+    def test_stuck_timer_survives_discharge_help_bounce(self):
+        """The DISCHARGE↔DISCHARGE_HELP bounce shouldn't reset the stuck
+        timer. After 60s total of 0W output (across both states), the
+        brain should reach PIB_DISCHARGE."""
+        from brains.permission_fsm import State
+
+        brain = PermissionFSM()
+        brain.state = State.DISCHARGE
+        brain.last_sent_target = -2400
+        brain.last_send_time = 0
+
+        for tick in range(70):
+            # Alternate between DISCHARGE and DISCHARGE_HELP-like readings.
+            # Zen stays at 0W throughout — the timer must accumulate.
+            brain.decide(
+                _steady_reading(p1=5000, zen_power=0, zen_soc=94, pib1=0, pib2=0, pib1_soc=80, pib2_soc=80),
+                t=tick,
+            )
+
+        assert brain.state.value == "PIB_DISCHARGE", (
+            f"Expected PIB_DISCHARGE after 70s of Zen stuck at 0W "
+            f"(including DISCHARGE↔DISCHARGE_HELP bouncing), "
+            f"got {brain.state.value}."
+        )
+
+    def test_no_fallback_without_pibs(self):
+        """If PIBs are empty too, no fallback — nothing to fall back to."""
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE")
+        brain.last_sent_target = -600
+        brain.last_send_time = 0
+
+        for tick in range(65):
+            brain.decide(
+                _steady_reading(p1=600, zen_power=0, zen_soc=94, pib1=0, pib2=0, pib1_soc=0, pib2_soc=0),
+                t=tick,
+            )
+
+        assert brain.state.value != "PIB_DISCHARGE", "Should not fall back to PIB_DISCHARGE when PIBs are empty."
