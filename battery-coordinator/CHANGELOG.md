@@ -1,3 +1,7 @@
+## 1.2.10
+
+- Stop sending the PIBs to standby while they're still carrying load. All three DISCHARGE_HELP exits judged raw P1, but in HELP the PIBs run the HomeWizard zero-mode controller whose entire job is to hold raw P1 at zero — so raw P1 measures the PIBs' success, not the load. Every dip below -100W was read as "load dropped", the PIBs were parked, and ~5s later P1 jumped by exactly the power just removed (production 2026-08-03 13:39-13:51: seven full cycles in twelve minutes, each importing ~1kW for the 15s HELP_ENTER holdoff before the PIBs came back). Exits now use `p1 - sum(pibs)` — what P1 would read with the PIBs at standby. The slow HELP_EXIT guard also switched from combined battery *output* (which counted the PIBs' own over-discharge as load, so it never fired while they helped) to actual household demand `abs(zen_power) + p1_without_pibs`; it now does real work when the Zendure is thermally derated.
+
 ## 1.2.9
 
 - Detect Zendure stuck at 0W output. After a power cut the inverter can accept commands (API returns success) but produce no output, leaving the brain sending discharge targets into a void while importing from grid. After 60s of sustained 0W output despite active discharge commands, the brain falls back to PIB_DISCHARGE so the PIBs can cover the load (~1600W). The stuck timer accumulates across DISCHARGE↔DISCHARGE_HELP bouncing — the 15s state ping-pong no longer resets detection. Logs `(Zendure unresponsive — falling back to PIBs)` on the state transition.

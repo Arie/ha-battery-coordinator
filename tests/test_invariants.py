@@ -8,6 +8,7 @@ specific test scenarios miss.
 import random
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
@@ -1254,6 +1255,114 @@ class TestNomNotEnteredWhilePibsHaveCapacity:
         )
 
 
+class TestDischargeHelpExitUsesPibCompensatedP1:
+    """Exiting DISCHARGE_HELP must be decided on P1 *without* the PIB
+    contribution, not on raw P1.
+
+    Production 2026-08-03 13:39–13:51: Zen pinned at -2400W, PIBs
+    discharging ~1.4kW, raw P1 swinging around zero. Every time raw P1
+    dipped below -100W the brain read "load dropped", put the PIBs in
+    standby, and ~5s later P1 jumped to ~+1000W — exactly the PIB power
+    that had just been removed. HELP re-entered 15s later. Seven full
+    cycles in twelve minutes.
+
+    Raw P1 near zero is what the PIBs' own zero-mode controller is
+    *producing*; it says nothing about whether they are still needed.
+    p1 - sum(pibs) is what P1 would read with the PIBs at standby.
+    """
+
+    # (raw p1, pib1, pib2) at each observed exit — from the production log.
+    OBSERVED_EXITS: ClassVar[list[tuple[int, int, int]]] = [
+        (-169, -600, -661),
+        (-109, -773, -781),
+        (-483, -646, -819),
+        (-113, -399, -715),
+        (-175, -628, -653),
+        (-148, -374, -758),
+        (-265, -400, -686),
+    ]
+
+    def test_pibs_stay_awake_while_still_carrying_load(self):
+        """At every point where production bailed out of HELP, the PIBs
+        were carrying ~1.1-1.5kW of real load. None may exit."""
+        for p1, pib1, pib2 in self.OBSERVED_EXITS:
+            brain = PermissionFSM()
+            brain.state = brain.state.__class__("DISCHARGE_HELP")
+            for tick in range(40):
+                brain.decide(
+                    _steady_reading(p1=p1, zen_power=-2400, pib1=pib1, pib2=pib2, pib1_soc=90, pib2_soc=93),
+                    t=tick,
+                )
+            assert brain.state.value == "DISCHARGE_HELP", (
+                f"P1={p1}W with PIBs at {pib1}/{pib2}W → left HELP for "
+                f"{brain.state.value}. Without the PIBs, P1 would read "
+                f"{p1 - pib1 - pib2:+}W — the load still needs them."
+            )
+
+    def test_no_standby_flapping_in_closed_loop(self):
+        """Closed-loop replay of the 13:39-13:51 window.
+
+        Load is held at a steady 3.4kW — more than the Zendure's 2.4kW
+        alone, so the PIBs are needed for the whole run. The PIB model
+        reproduces the HW zero-mode controller's documented behaviour:
+        slam to max on enable, then converge on the residual with a lag.
+        That lag is what drags raw P1 negative for several seconds at a
+        time while the PIBs are still very much needed.
+
+        Correct behaviour: PIBs are ordered awake once and left alone.
+        """
+        LOAD = 3400.0
+        PIB_MAX = 1600.0
+
+        brain = PermissionFSM()
+        brain.state = brain.state.__class__("DISCHARGE_HELP")
+
+        pib_total = -PIB_MAX  # just slammed on, as the HW controller does
+        pib_awake = True
+        zen_power = -2400.0
+        standby_orders = 0
+        import_ticks = 0
+
+        for tick in range(300):
+            p1 = LOAD + zen_power + pib_total
+            d = brain.decide(
+                _steady_reading(
+                    p1=p1,
+                    zen_power=zen_power,
+                    pib1=pib_total / 2,
+                    pib2=pib_total / 2,
+                    pib1_soc=90,
+                    pib2_soc=93,
+                ),
+                t=tick,
+            )
+            if d.pib_mode == "standby":
+                standby_orders += 1
+            if d.pib_mode is not None:
+                was_awake, pib_awake = pib_awake, d.pib_mode != "standby"
+                if pib_awake and not was_awake:
+                    pib_total = -PIB_MAX  # slam-on transient
+            if not pib_awake:
+                pib_total = 0.0
+            else:
+                # Converge on the residual the Zendure can't cover, with lag.
+                desired = -max(0.0, min(PIB_MAX, LOAD + zen_power))
+                pib_total += 0.35 * (desired - pib_total)
+            zen_power = float(d.target)
+            if p1 > 200:
+                import_ticks += 1
+
+        assert standby_orders == 0, (
+            f"Ordered PIB standby {standby_orders}x across 300s while the "
+            f"load ({LOAD:.0f}W) exceeded what the Zendure can supply alone. "
+            "Raw P1 hovering near zero is the PIB controller doing its job, "
+            "not a load drop."
+        )
+        assert import_ticks < 30, (
+            f"Imported >200W on {import_ticks}/300 ticks — the PIBs were switched off while the load still needed them."
+        )
+
+
 class TestDischargeHelpOverDischargeHoldoff:
     """The DISCHARGE_HELP → DISCHARGE bail on `r.p1 < P1_OVER_DISCHARGE`
     must filter the 1–2-tick PIB activation transient. The HW P1 meter's
@@ -1292,15 +1401,25 @@ class TestDischargeHelpOverDischargeHoldoff:
         )
 
     def test_real_over_discharge_still_exits(self):
-        """Sustained P1 < P1_OVER_DISCHARGE for the holdoff window (i.e.,
-        load actually dropped) must still exit DISCHARGE_HELP."""
+        """Sustained over-discharge for the holdoff window (i.e. load
+        actually dropped) must still exit DISCHARGE_HELP.
+
+        A real load drop shows up as the PIBs backing off — they run the
+        zero-mode controller and cannot charge on discharge_allowed, so
+        with nothing left to cover they wind down to ~0 and the Zendure's
+        pinned -2400W pushes P1 negative on its own. Here: ~800W of load
+        against a Zendure stuck at max. Note the PIBs at -700/-700 with
+        P1 at -300 that this test used to assert on described a 3500W
+        load — the production over-discharge case, where the PIBs are
+        needed — not a load drop.
+        """
         brain = PermissionFSM()
         brain.state = brain.state.__class__("DISCHARGE_HELP")
 
-        # 5 consecutive ticks of -300W — load really dropped.
+        # 5 consecutive ticks: load ~800W, PIBs wound down, Zen at max.
         for tick in range(5):
             brain.decide(
-                _steady_reading(p1=-300, zen_power=-2400, pib1=-700, pib2=-700, pib1_soc=80, pib2_soc=80),
+                _steady_reading(p1=-1550, zen_power=-2400, pib1=-25, pib2=-25, pib1_soc=80, pib2_soc=80),
                 t=tick,
             )
 

@@ -18,6 +18,19 @@ def _total_charge_cap(r: Reading) -> int:
     return sum(pib_max_charge(s) for s in r.pib_socs)
 
 
+def _p1_without_pibs(r: Reading) -> float:
+    """What P1 would read if the PIBs went to standby right now.
+
+    PIB power is negative while discharging, so removing their share adds
+    it back to the grid reading. In DISCHARGE_HELP the PIBs run the HW
+    zero-mode controller, whose whole job is to drive raw P1 to ~0 — raw
+    P1 therefore says nothing about whether they are still needed, and
+    reading it as "load dropped" switches off the very thing holding the
+    grid at zero. This is the signal that answers the question.
+    """
+    return r.p1 - sum(r.pibs)
+
+
 def _all_in_taper(r: Reading, threshold: int) -> bool:
     """All PIBs are in their taper zone (per-PIB charge cap below threshold)."""
     return bool(r.pib_socs) and all(pib_max_charge(s) < threshold for s in r.pib_socs)
@@ -340,26 +353,35 @@ class PermissionFSM:
                 ),
             ],
             State.DISCHARGE_HELP: [
+                # Every exit from HELP is judged on _p1_without_pibs, never
+                # raw P1. The PIBs are actively regulating raw P1 to zero
+                # here, so raw P1 measures their success, not the load.
                 # Solar returns → charge
                 (
                     Transition(
                         State.CHARGE, holdoff_s=self.FLIP_S, pib_mode="zero", pib_permissions=["charge_allowed"]
                     ),
-                    lambda r, _: r.p1 < self.P1_EXPORT,
+                    lambda r, _: _p1_without_pibs(r) < self.P1_EXPORT,
                 ),
                 # Zendure can handle alone → back to solo
-                # P1 negative = over-discharging, load dropped → back to NOM solo.
+                # Over-discharging, load dropped → back to NOM solo.
                 # 3s holdoff filters the 1-2 tick PIB activation transient
                 # (HW P1 controller slams 0→max in one tick on entry, briefly
                 # overshooting load by ~1.6kW). Real load drops still exit,
                 # just 3s later instead of instantly.
                 (
                     Transition(State.DISCHARGE, holdoff_s=3, pib_mode="standby"),
-                    lambda r, _: r.p1 < self.P1_OVER_DISCHARGE,
+                    lambda r, _: _p1_without_pibs(r) < self.P1_OVER_DISCHARGE,
                 ),
+                # Slower exit: total household demand has fallen far enough
+                # that the Zendure covers it alone with headroom. Demand is
+                # what the Zendure is supplying plus what the grid would
+                # still have to deliver without the PIBs — NOT combined
+                # battery output, which counts the PIBs' own over-discharge
+                # as if it were load and so never fired while they helped.
                 (
                     Transition(State.DISCHARGE, holdoff_s=self.HELP_EXIT_S, pib_mode="standby"),
-                    lambda r, _: abs(r.zen_power) + max(0, -sum(r.pibs)) < self.max_discharge * self.ZEN_HELP_EXIT_FRAC,
+                    lambda r, _: abs(r.zen_power) + _p1_without_pibs(r) < self.max_discharge * self.ZEN_HELP_EXIT_FRAC,
                 ),
                 # Zendure empty → PIBs take over
                 (
