@@ -144,6 +144,11 @@ class PermissionFSM:
     # Stuck detection — Zen accepts commands but produces no output
     ZEN_STUCK_S = 60
 
+    # Hysteresis on the discharge hold-off. Demand has to climb this far
+    # above PILOT_W before discharging resumes, so a load hovering at the
+    # floor doesn't flip the target every tick.
+    EXPORT_HYST_W = 25
+
     def __init__(
         self,
         max_charge_w: int = 2400,
@@ -228,6 +233,10 @@ class PermissionFSM:
         # doesn't reset the timer.
         self._zen_stuck_since: float | None = None
         self._zen_is_stuck: bool = False
+        # DISCHARGE is holding at zero because demand is below the pilot
+        # floor. Latched so the resume threshold can sit higher than the
+        # stop threshold.
+        self._discharge_held_off: bool = False
 
         # --- Transition table ---
         # Each state maps to a list of transitions, checked in order.
@@ -534,6 +543,7 @@ class PermissionFSM:
         """Initialise the Zendure step on entering a new state. Default 0."""
         self._zen_step_idx = 0
         self._charge_was_nom = False
+        self._discharge_held_off = False
         # Preserve the stuck timer across DISCHARGE↔DISCHARGE_HELP bounces
         # so it accumulates to 60s despite the state ping-pong.
         if self.state not in (State.DISCHARGE, State.DISCHARGE_HELP):
@@ -574,7 +584,26 @@ class PermissionFSM:
                 return self._current_step()
 
         if self.state == State.DISCHARGE:
+            # nom is exactly -(house load): the zen_power term cancels
+            # whatever the Zendure is currently pushing out, so it reads
+            # demand directly and is stable regardless of the setpoint.
+            # That is what makes it safe to threshold on.
             nom = int(r.zen_power - r.p1)
+
+            # Holding the -PILOT_W floor when demand is below it feeds the
+            # difference back into the grid. P1 then sits around -50W,
+            # inside the dead zone above the DISCHARGE->CHARGE guard
+            # (-100W), so no transition can see it and the brain parks
+            # there indefinitely — bleeding the pack into the meter at
+            # ~1.2kWh/day. Stop instead of holding the floor.
+            if self._discharge_held_off:
+                if nom > -(PILOT_W + self.EXPORT_HYST_W):
+                    return 0
+                self._discharge_held_off = False
+            elif nom > -PILOT_W:
+                self._discharge_held_off = True
+                return 0
+
             return max(-self.max_discharge, min(-PILOT_W, nom))
 
         if self.state == State.DISCHARGE_HELP:
@@ -688,7 +717,12 @@ class PermissionFSM:
                 return target, False, False
 
         if self.state in (State.DISCHARGE, State.DISCHARGE_HELP):
-            send = change >= self.NOM_DEADBAND or (elapsed >= 30 and target != 0)
+            # A held-off zero is a real hold command, not "nothing to say",
+            # so it heartbeats like any other target. main.py maps target=0
+            # in DISCHARGE to hold_zero() — a RAM write, no relay click and
+            # no flash wear — so re-asserting it every 30s is cheap.
+            holding_off = target == 0 and self._discharge_held_off
+            send = change >= self.NOM_DEADBAND or (elapsed >= 30 and (target != 0 or holding_off))
             return target, send, urgent
 
         if elapsed < 5.0:

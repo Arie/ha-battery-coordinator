@@ -55,6 +55,7 @@ The boundary tick is clamped to `current_step + 400` to avoid a ~1.4kW jump that
 - **PIB permission failures retry next tick.** A failed `set_mode` PUT calls `brain.mark_pib_send_failed()`, which rewinds the heartbeat timer so the next tick re-emits — not after 5 min.
 - **Startup detection has a 2s holdoff.** A single noisy first reading can't lock the brain into a wrong state.
 - **p1_contradicts requires 3s sustained.** Brief P1 spikes during charge/discharge no longer accelerate step-down.
+- **DISCHARGE stops rather than holding the pilot floor into an export.** `nom = zen_power - p1` equals `-(house load)` exactly — the `zen_power` term cancels the current setpoint — so it is safe to threshold on. When demand sits below `PILOT_W`, holding the -50W floor pushed the difference to the grid and parked P1 at ~-50W, inside the dead zone above the `DISCHARGE->CHARGE` guard (`p1 < -100W`). No transition could see it, so the brain stayed there indefinitely and bled the pack into the meter. `_discharge_held_off` latches the stop, with `EXPORT_HYST_W` (25W) of hysteresis so a load hovering at the boundary doesn't flip the target every tick. Pinned by `TestNeverFeedsBackToGrid`.
 
 ## Network
 
@@ -166,3 +167,4 @@ Brain defaults live in `PermissionFSM.DEFAULTS` (canonical), with class constant
 | NOM_DEADBAND | 10W | Min change before sending NOM target |
 | ZEN_MAXED_FRAC | 0.95 | Zen at this fraction of max → considered maxed |
 | ZEN_HELP_EXIT_FRAC | 0.8 | Total discharge below this → PIBs redundant |
+| EXPORT_HYST_W | 25W | Hysteresis on the DISCHARGE hold-off (stop at 50W demand, resume at 75W) |

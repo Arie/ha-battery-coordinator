@@ -5,6 +5,7 @@ invariants hold regardless of the scenario. Catches edge cases that
 specific test scenarios miss.
 """
 
+import itertools
 import random
 import sys
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
-from brains.permission_fsm import PermissionFSM
+from brains.permission_fsm import PermissionFSM, State
 from coordinator_logic import Reading
 
 
@@ -1529,3 +1530,190 @@ class TestZenStuckFallback:
             )
 
         assert brain.state.value != "PIB_DISCHARGE", "Should not fall back to PIB_DISCHARGE when PIBs are empty."
+
+
+def _closed_loop(brain, load_w, ticks, t0=0, zen_soc=80, pib_socs=(50, 50), start_zen=0.0, pibs_track=False):
+    """Run the brain against a simulated house, closing the P1 loop.
+
+    The other scenario helpers feed the brain a fixed P1 that ignores what
+    it just commanded. Export bugs only appear when the loop is closed —
+    the meter has to actually reflect the battery's own output, otherwise
+    the brain never sees the surplus it is creating.
+
+    Returns the list of (p1, zen_power) samples.
+    """
+    zen = start_zen
+    samples = []
+    for i in range(ticks):
+        pib_w = 0.0
+        # P1 = house load minus whatever the batteries are pushing out.
+        # zen is negative while discharging, so this adds back as export.
+        p1 = load_w + zen + pib_w
+        r = Reading(
+            p1=p1,
+            pibs=[pib_w / 2, pib_w / 2],
+            pib_socs=list(pib_socs),
+            zen_power=zen,
+            zen_soc=zen_soc,
+        )
+        d = brain.decide(r, t=t0 + i)
+        samples.append((p1, zen))
+        # Zendure ramps toward target over ~2s.
+        zen += (d.target - zen) * 0.5
+    return samples
+
+
+class TestNeverFeedsBackToGrid:
+    """The battery must never sustain an export.
+
+    Production bug found 2026-08-22: with the house load below PILOT_W the
+    brain parks in DISCHARGE at exactly -50W forever. The -50W floor in
+    _compute_target creates the export, and the DISCHARGE->CHARGE guard
+    needs p1 < -100W to fire, so -50W lands in a dead zone no transition
+    can see. Under net metering this netted away invisibly; on a dynamic
+    tariff it is a real cost, and either way it silently drains the pack
+    the user was holding for the evening peak.
+    """
+
+    def _sustained_export_ticks(self, samples, threshold=-5):
+        return sum(1 for p1, _ in samples if p1 < threshold)
+
+    def test_no_sustained_export_when_house_load_vanishes(self):
+        """The headline case: EV unplugs, everything else is off."""
+        brain = PermissionFSM()
+        _closed_loop(brain, load_w=1500, ticks=60)  # wake into discharge
+        samples = _closed_loop(brain, load_w=0, ticks=400, t0=60, start_zen=-1400)
+
+        tail = samples[-120:]  # last 2 minutes, well past every holdoff
+        exporting = self._sustained_export_ticks(tail)
+        assert exporting == 0, (
+            f"exported on {exporting}/120 settled ticks; final P1={tail[-1][0]:.0f}W zen={tail[-1][1]:.0f}W"
+        )
+
+    def test_no_sustained_export_at_tiny_house_load(self):
+        """Sub-pilot loads are the trigger — 30W is a router and a clock."""
+        for load in (0, 10, 30, 49):
+            brain = PermissionFSM()
+            _closed_loop(brain, load_w=1500, ticks=60)
+            samples = _closed_loop(brain, load_w=load, ticks=400, t0=60, start_zen=-1400)
+            tail = samples[-120:]
+            exporting = self._sustained_export_ticks(tail)
+            assert exporting == 0, f"load={load}W exported on {exporting}/120 settled ticks"
+
+    def test_still_covers_load_above_the_pilot_floor(self):
+        """The fix must not stop the battery doing its actual job."""
+        brain = PermissionFSM()
+        _closed_loop(brain, load_w=1500, ticks=60)
+        samples = _closed_loop(brain, load_w=600, ticks=200, t0=60, start_zen=-1400)
+        tail = samples[-60:]
+        # Grid should be held near zero by the Zendure, not left importing.
+        worst_import = max(p1 for p1, _ in tail)
+        assert worst_import < 100, f"left {worst_import:.0f}W importing instead of covering it"
+
+    def test_does_not_chatter_around_the_floor(self):
+        """A load hovering at the threshold must not flip the target 1Hz."""
+        brain = PermissionFSM()
+        _closed_loop(brain, load_w=1500, ticks=60)
+        rng = random.Random(7)
+        zen = -1400.0
+        targets = []
+        for i in range(300):
+            load = 50 + rng.uniform(-8, 8)  # jitter across the boundary
+            p1 = load + zen
+            r = Reading(p1=p1, pibs=[0, 0], pib_socs=[50, 50], zen_power=zen, zen_soc=80)
+            d = brain.decide(r, t=60 + i)
+            targets.append(d.target)
+            zen += (d.target - zen) * 0.5
+        flips = sum(1 for a, b in itertools.pairwise(targets) if abs(a - b) >= 40)
+        assert flips <= 4, f"target flipped {flips} times across the floor — needs hysteresis"
+
+
+class TestPIBsNeverFeedBack:
+    """PIB-led discharge must not sustain an export either.
+
+    The PIBs run HomeWizard's own zero-metering controller — the brain
+    can't set their power, only their mode and permissions. So the check
+    is structural: is there a state where the brain leaves them
+    discharge-enabled while the grid is being fed, with no transition
+    able to see it? PIB_DISCHARGE -> CHARGE needs p1 < -100W, the same
+    dead-zone threshold that trapped the Zendure at -50W.
+    """
+
+    def _pib_loop(self, brain, load_w, ticks, t0=0, zen_soc=5, pib_socs=(60, 60), overshoot=1.0):
+        """Closed loop where the PIBs chase P1 to zero, with gain error.
+
+        overshoot > 1 models the documented 1-2s overcorrection.
+        """
+        pib_total = 0.0
+        samples = []
+        for i in range(ticks):
+            p1 = load_w + pib_total
+            r = Reading(
+                p1=p1,
+                pibs=[pib_total / 2, pib_total / 2],
+                pib_socs=list(pib_socs),
+                zen_power=0.0,
+                zen_soc=zen_soc,
+            )
+            brain.decide(r, t=t0 + i)
+            samples.append((p1, pib_total, brain.state.value))
+            # PIBs only act while the brain has granted discharge.
+            perms = brain._pib_perms_desired or []
+            mode = brain._pib_mode_desired
+            if mode == "zero" and "discharge_allowed" in perms:
+                pib_total -= p1 * 0.6 * overshoot
+                pib_total = max(-1600.0, min(0.0, pib_total))
+            else:
+                pib_total = 0.0
+        return samples
+
+    def test_pib_discharge_settles_without_export(self):
+        brain = PermissionFSM()
+        # Zen drained -> PIB_DISCHARGE takes over the load.
+        for i in range(60):
+            brain.decide(
+                Reading(p1=900, pibs=[0, 0], pib_socs=[60, 60], zen_power=0, zen_soc=5),
+                t=i,
+            )
+        samples = self._pib_loop(brain, load_w=900, ticks=200, t0=60)
+        assert samples[-1][2] == "PIB_DISCHARGE", f"expected PIB_DISCHARGE, got {samples[-1][2]}"
+        tail = samples[-60:]
+        worst = min(p1 for p1, _, _ in tail)
+        assert worst > -50, f"PIBs sustained {worst:.0f}W export"
+
+    def test_pib_overshoot_does_not_latch_into_export(self):
+        """A 40% overcorrection must damp out, not settle exporting."""
+        brain = PermissionFSM()
+        for i in range(60):
+            brain.decide(
+                Reading(p1=900, pibs=[0, 0], pib_socs=[60, 60], zen_power=0, zen_soc=5),
+                t=i,
+            )
+        samples = self._pib_loop(brain, load_w=900, ticks=300, t0=60, overshoot=1.4)
+        tail = samples[-60:]
+        worst = min(p1 for p1, _, _ in tail)
+        assert worst > -100, f"PIB overshoot latched at {worst:.0f}W export"
+
+    def test_pibs_are_not_discharge_enabled_while_grid_exports(self):
+        """Sustained export must revoke the discharge permission.
+
+        This is the cross-charge lock working in the other direction: the
+        permission is the only hard stop the brain has on a PIB, so if the
+        grid is being fed it must not still be granted.
+        """
+        brain = PermissionFSM()
+        for i in range(60):
+            brain.decide(
+                Reading(p1=900, pibs=[0, 0], pib_socs=[60, 60], zen_power=0, zen_soc=5),
+                t=i,
+            )
+        assert brain.state == State.PIB_DISCHARGE
+
+        # Solar comes up: the grid is now being fed, sustained.
+        for i in range(200):
+            brain.decide(
+                Reading(p1=-800, pibs=[-100, -100], pib_socs=[60, 60], zen_power=0, zen_soc=5),
+                t=60 + i,
+            )
+        perms = brain._pib_perms_desired or []
+        assert "discharge_allowed" not in perms, f"still discharge-enabled while exporting: {perms}"
