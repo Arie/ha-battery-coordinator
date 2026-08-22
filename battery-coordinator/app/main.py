@@ -50,7 +50,10 @@ async def main() -> None:
 
     log.setLevel(config.log_level.upper())
 
-    brain = PermissionFSM(**config.brain_kwargs())
+    # allow_grid_charge is passed separately: brain_kwargs() is int-only
+    # (it maps the numeric tunables), and widening it to int | bool just to
+    # carry one flag makes every consumer handle a union it never wants.
+    brain = PermissionFSM(allow_grid_charge=config.allow_grid_charge, **config.brain_kwargs())
 
     io = DeviceIO(config)
     mode = "LIVE" if not config.dry_run else "DRY RUN"
@@ -72,6 +75,7 @@ async def main() -> None:
             log.warning("Zendure SN never appeared — writes will fail until it does")
 
         prev_state = None
+        prev_gates = ""
         prev_target: int | None = None
         last_info_t = 0.0
 
@@ -134,6 +138,18 @@ async def main() -> None:
                 pib_str = f"🔌 {p1.pib_power:>+5.0f}W ({p1.pib_count}x)"
 
             tgt_s = f"charge {d.target}W" if d.target > 0 else f"discharge {abs(d.target)}W" if d.target < 0 else "hold"
+            # Make a gated tick unmistakable in the log — a forced SLEEP
+            # otherwise looks identical to "nothing to do", which is the
+            # one reading a user debugging their price automation needs
+            # to tell apart.
+            gates = "".join(
+                (
+                    "🔒D" if reading.inhibit_discharge else "",
+                    "🔒C" if reading.inhibit_charge else "",
+                    "⚡F" if reading.force_charge else "",
+                )
+            )
+            gate_s = f" [{gates}]" if gates else ""
             diff = d.target - zen.power
 
             # State transition → its own INFO line for easy grep.
@@ -150,11 +166,13 @@ async def main() -> None:
             # the 60s heartbeat. Quiet ticks stay at DEBUG.
             target_changed = prev_target is None or abs(d.target - prev_target) >= 50
             heartbeat_due = (t - last_info_t) >= HEARTBEAT_S
-            interesting = bool(sent or pib_sent or state_changed or target_changed or heartbeat_due)
+            gates_changed = gates != prev_gates
+            prev_gates = gates
+            interesting = bool(sent or pib_sent or state_changed or target_changed or heartbeat_due or gates_changed)
             line = (
                 f"{now}  P1:{reading.p1:>+6.0f}W  {pib_str}  "
                 f"☀️{reading.solar:>5.0f}W  🪫{zen.power:>+6.0f}W ({zen.soc:.0f}%)  "
-                f"[{d.zone}] → {tgt_s} ({diff:>+.0f}){sent}{pib_sent}"
+                f"[{d.zone}]{gate_s} → {tgt_s} ({diff:>+.0f}){sent}{pib_sent}"
             )
             if interesting:
                 log.info(line)

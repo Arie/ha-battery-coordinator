@@ -329,6 +329,65 @@ class OptionalHASensor:
         return 0.0
 
 
+class OptionalHABinarySensor:
+    """Read an on/off HA entity as a bool. Returns False if unconfigured.
+
+    Wraps OptionalHASensor rather than duplicating its retry/staleness
+    handling. False is the fail-safe for all three gate entities: an
+    unreachable HA means the coordinator keeps behaving exactly as it did
+    before the gates existed, and — critically — never starts a grid
+    charge on a reading it could not actually confirm.
+    """
+
+    # input_boolean reports on/off; template and binary_sensor entities
+    # may report true/1/yes depending on how they were written.
+    _TRUE = frozenset({"on", "true", "1", "yes", "home", "open"})
+
+    def __init__(self, ha_url: str, ha_token: str, entity_id: str, timeout: float = 3, max_stale_s: float = 60):
+        self._url = f"{ha_url}/api/states/{entity_id}" if ha_url and entity_id else ""
+        self._entity_id = entity_id
+        self._token = ha_token
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._last_value: bool = False
+        self._last_value_t: float | None = None
+        self._max_stale_s = max_stale_s
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._url)
+
+    async def read(self, session: aiohttp.ClientSession, now: float | None = None) -> bool:
+        if not self._url:
+            return False
+        if now is None:
+            now = time.monotonic()
+        try:
+            headers = {"Authorization": f"Bearer {self._token}"}
+            async with session.get(self._url, headers=headers, timeout=self._timeout) as r:
+                if r.status != 200:
+                    log.warning("HA gate %s: HTTP %s", self._entity_id, r.status)
+                else:
+                    data = await r.json()
+                    v = data.get("state")
+                    if v is not None and v not in ("unknown", "unavailable"):
+                        self._last_value = str(v).strip().lower() in self._TRUE
+                        self._last_value_t = now
+                        return self._last_value
+        except Exception:
+            pass
+        # Hold the last-known value briefly so a blip mid-EV-charge doesn't
+        # drop the gate and resume draining. Past the window, fall open to
+        # False — an indefinitely stale gate is a stuck controller, not a
+        # policy, and False is the pre-feature behaviour.
+        if self._last_value_t is not None and (now - self._last_value_t) <= self._max_stale_s:
+            return self._last_value
+        if self._last_value_t is not None:
+            log.warning("HA gate %s stale > %ss; treating as off", self._entity_id, self._max_stale_s)
+            self._last_value_t = None  # log once until next success
+            self._last_value = False
+        return False
+
+
 class DeviceIO:
     """Unified device I/O layer. Reads all devices, produces a Reading."""
 
@@ -344,6 +403,17 @@ class DeviceIO:
         self.pib_powers = [
             OptionalHASensor(config.ha_url, config.ha_token, e, config.read_timeout) for e in config.pib_power_entities
         ]
+        # Tariff gates. Policy lives in HA automations; these just carry
+        # the resulting booleans into the brain.
+        self.inhibit_discharge = OptionalHABinarySensor(
+            config.ha_url, config.ha_token, config.inhibit_discharge_entity, config.read_timeout
+        )
+        self.inhibit_charge = OptionalHABinarySensor(
+            config.ha_url, config.ha_token, config.inhibit_charge_entity, config.read_timeout
+        )
+        self.force_charge = OptionalHABinarySensor(
+            config.ha_url, config.ha_token, config.force_charge_entity, config.read_timeout
+        )
         if self.pib_powers and self.pib_socs and len(self.pib_powers) != len(self.pib_socs):
             # Config.validate() catches this and refuses to start; if we're
             # here something bypassed validation. Log an error so it's at
@@ -375,6 +445,9 @@ class DeviceIO:
             solar_t = tg.create_task(self.solar.read(session))
             pib_soc_ts = [tg.create_task(s.read(session)) for s in self.pib_socs]
             pib_power_ts = [tg.create_task(p.read(session)) for p in self.pib_powers]
+            inhibit_dis_t = tg.create_task(self.inhibit_discharge.read(session))
+            inhibit_chg_t = tg.create_task(self.inhibit_charge.read(session))
+            force_chg_t = tg.create_task(self.force_charge.read(session))
         zen = zen_t.result()
         p1 = p1_t.result()
         solar = solar_t.result()
@@ -401,6 +474,9 @@ class DeviceIO:
             zen_power=zen.power,
             zen_soc=zen.soc,
             solar=solar,
+            inhibit_discharge=inhibit_dis_t.result(),
+            inhibit_charge=inhibit_chg_t.result(),
+            force_charge=force_chg_t.result(),
         )
 
         return reading, zen, p1

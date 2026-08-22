@@ -12,6 +12,19 @@ configuration:
     name: Solar power entity (optional)
     description: A Home Assistant sensor reporting current solar production in W. Leave empty to skip — the brain still works without solar input.
 
+  inhibit_discharge_entity:
+    name: Hold-SOC entity (optional)
+    description: Any HA on/off entity. While it is on the batteries stop discharging and hold their charge — for cheap hours on a dynamic tariff, or while an EV is charging so the house battery doesn't pay for it. Leave empty to disable.
+  inhibit_charge_entity:
+    name: Stop-charging entity (optional)
+    description: Any HA on/off entity. While it is on the batteries stop charging — useful when exporting is worth more than storing. Leave empty to disable.
+  force_charge_entity:
+    name: Grid-charge trigger entity (optional)
+    description: Any HA on/off entity. While it is on the batteries charge from the grid at full rate, regardless of what the meter reads. Requires "Allow grid charging" below; ignored without it.
+  allow_grid_charge:
+    name: Allow grid charging
+    description: Opts out of the "never charge from the grid" safety rule. Off by default. Only turn this on if you are on a dynamic tariff where banking a cheap hour against an expensive one actually pays, and you have set a grid-charge trigger entity above.
+
   pib_soc_entities:
     name: PIB state-of-charge entities
     description: HA sensor entity IDs reporting each PIB's SOC (%). The HomeWizard P1 API doesn't expose SOC, so this must come from HA. Defaults to the names HA's HomeWizard integration creates. Up to 4 supported; each PIB is treated as a first-class unit by the brain (no averaging).

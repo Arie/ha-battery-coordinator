@@ -39,6 +39,7 @@ def _all_in_taper(r: Reading, threshold: int) -> bool:
 class State(Enum):
     SLEEP = "SLEEP"
     CHARGE = "CHARGE"
+    GRID_CHARGE = "GRID_CHARGE"
     DISCHARGE = "DISCHARGE"
     DISCHARGE_HELP = "DISCHARGE_HELP"
     PIB_DISCHARGE = "PIB_DISCHARGE"
@@ -66,6 +67,7 @@ class PermissionFSM:
     States:
       SLEEP          – all standby
       CHARGE         – PIBs zero (charge-only), Zendure at fixed step or NOM
+      GRID_CHARGE    – deliberate grid import (opt-in), PIBs to_full
       DISCHARGE      – Zendure NOM-tracks P1 solo, PIBs standby
       DISCHARGE_HELP – Zendure maxed, PIBs helping (discharge-only)
       PIB_DISCHARGE  – Zendure off, PIBs discharge alone
@@ -155,6 +157,13 @@ class PermissionFSM:
         max_discharge_w: int = 2400,
         zen_soc_max: int = 100,
         zen_soc_min: int = 10,
+        # Opt-in escape hatch from the "never charge from the grid" rule.
+        # That rule is correct under net metering, where a grid-charged
+        # kWh can only ever be resold at a loss. On a dynamic tariff a
+        # cheap hour is worth banking against an expensive one, so the
+        # rule becomes a policy choice — but it stays off by default and
+        # still requires an explicit per-tick force_charge signal.
+        allow_grid_charge: bool = False,
         # Brain tuning — exposed via add-on options. Defaults match the
         # production-tested class constants above; instance attributes
         # below shadow those constants so per-instance overrides work
@@ -177,6 +186,7 @@ class PermissionFSM:
         self.max_discharge = max_discharge_w
         self.zen_soc_max = zen_soc_max
         self.zen_soc_min = zen_soc_min
+        self.allow_grid_charge = allow_grid_charge
 
         # Per-instance overrides for the tunables. None = use class default.
         if step_holdoff_s is not None:
@@ -407,6 +417,11 @@ class PermissionFSM:
                     lambda r, _: self._zen_is_stuck and any(s > 1 for s in r.pib_socs),
                 ),
             ],
+            # GRID_CHARGE has no table entries: both its entry and its exit
+            # are driven by the force_charge gate in decide(), which runs
+            # ahead of the table. Leaving it empty keeps the two mechanisms
+            # from disagreeing about who owns the state.
+            State.GRID_CHARGE: [],
             State.PIB_DISCHARGE: [
                 # Solar returns → charge
                 (
@@ -510,12 +525,87 @@ class PermissionFSM:
         else:
             self._pib_low_since = None
 
+    # --- Tariff gates ---
+
+    # Which inhibit flag, if any, forbids each state. States absent from
+    # this map (SLEEP) are never inhibited — standby is always allowed.
+    _INHIBITED_BY: ClassVar[dict[State, str]] = {
+        State.CHARGE: "inhibit_charge",
+        State.GRID_CHARGE: "inhibit_charge",
+        State.DISCHARGE: "inhibit_discharge",
+        State.DISCHARGE_HELP: "inhibit_discharge",
+        State.PIB_DISCHARGE: "inhibit_discharge",
+    }
+
+    def _is_inhibited(self, state: State, r: Reading) -> bool:
+        """True if an external gate forbids this state on this reading."""
+        flag = self._INHIBITED_BY.get(state)
+        return flag is not None and bool(getattr(r, flag))
+
+    def _wants_grid_charge(self, r: Reading) -> bool:
+        """Deliberate grid import requested, permitted, and still useful.
+
+        Three independent conditions, all required: the operator opted in
+        at config time, HA is asserting the signal right now, and there is
+        somewhere to put the energy. inhibit_charge outranks force_charge —
+        contradictory gates resolve to the conservative one so a stuck-on
+        automation can never out-argue a stop request.
+        """
+        if not (self.allow_grid_charge and r.force_charge):
+            return False
+        if r.inhibit_charge:
+            return False
+        room = r.zen_soc < self.zen_soc_max or any(s < 99 for s in r.pib_socs)
+        return room
+
+    def _apply_gates(self, r: Reading, t: float) -> tuple[str | None, list[str] | None, bool] | None:
+        """Run the external gates ahead of the transition table.
+
+        Returns (pib_mode, pib_permissions, inhibited) when a gate takes
+        control of this tick, or None to let the FSM proceed normally.
+        Gates are checked before transitions because they must be able to
+        override any state, including ones whose own table would keep
+        them there (DISCHARGE has no "stop discharging" guard — covering
+        load is exactly its job).
+        """
+        # Grid charge outranks everything except inhibit_charge, which
+        # _wants_grid_charge already folds in.
+        if self._wants_grid_charge(r):
+            if self.state != State.GRID_CHARGE:
+                self.state = State.GRID_CHARGE
+                self._init_step_for_new_state()
+                return "to_full", ["charge_allowed"], False
+            return None, None, False
+
+        # Leaving GRID_CHARGE: the signal dropped or the batteries filled.
+        # Drop to SLEEP rather than guessing — the normal wake guards pick
+        # the right successor from the next few seconds of P1.
+        if self.state == State.GRID_CHARGE:
+            self.state = State.SLEEP
+            self._init_step_for_new_state()
+            return "standby", None, False
+
+        if self._is_inhibited(self.state, r):
+            self.state = State.SLEEP
+            self._init_step_for_new_state()
+            return "standby", None, True
+
+        return None
+
     # --- FSM core ---
 
     def _check_transitions(self, r: Reading, pib_abs: float, t: float) -> tuple[str | None, list[str] | None]:
         """Check transitions for current state. Returns (pib_mode, pib_permissions) if transition fires."""
         transitions = self._transitions.get(self.state, [])
         for trans, guard in transitions:
+            # A gated-off destination is treated as a failed guard, timer
+            # and all. Vetoing only at the moment the holdoff expires
+            # would let a transition sit fully armed for the whole
+            # inhibited window and fire on the first tick after release,
+            # skipping the debounce that holdoff exists to provide.
+            if self._is_inhibited(trans.to, r):
+                trans.reset()
+                continue
             if not guard(r, pib_abs):
                 trans.reset()
                 continue
@@ -556,6 +646,11 @@ class PermissionFSM:
         """Compute Zendure target power for current state."""
         if self.state == State.SLEEP:
             return 0
+
+        if self.state == State.GRID_CHARGE:
+            # No NOM, no stepping: importing is the point, so P1 carries no
+            # signal worth tracking. Flat max rate, SOC-clamped downstream.
+            return self.max_charge
 
         if self.state == State.CHARGE:
             pib_charge_cap = _total_charge_cap(r)
@@ -637,8 +732,15 @@ class PermissionFSM:
             self._zen_stuck_since = None
             self._zen_is_stuck = False
 
-        # Check transitions
-        pib_mode, pib_permissions = self._check_transitions(r, pib_abs, t)
+        # External gates run first — they can override any state, and a
+        # state they force must not then be re-evaluated by that state's
+        # own table on the same tick.
+        inhibited = False
+        gated = self._apply_gates(r, t)
+        if gated is not None:
+            pib_mode, pib_permissions, inhibited = gated
+        else:
+            pib_mode, pib_permissions = self._check_transitions(r, pib_abs, t)
 
         # Track desired PIB state across ticks so the heartbeat can re-assert
         # it. Update on transition; otherwise re-emit when PIB_HEARTBEAT_S
@@ -660,7 +762,7 @@ class PermissionFSM:
             target = 0
 
         # Send logic
-        target, send, _urgent = self._should_send(target, t)
+        target, send, _urgent = self._should_send(target, t, inhibited)
 
         return Decision(
             target=target,
@@ -668,12 +770,22 @@ class PermissionFSM:
             send=send,
             pib_mode=pib_mode,
             pib_permissions=pib_permissions,
+            inhibited=inhibited,
         )
 
-    def _should_send(self, target: int, t: float) -> tuple[int, bool, bool]:
+    def _should_send(self, target: int, t: float, inhibited: bool = False) -> tuple[int, bool, bool]:
         elapsed = t - self.last_send_time
         change = abs(target - (self.last_sent_target or 0))
         urgent = change > 500
+
+        # An inhibit-forced target=0 is a genuine stop request and must
+        # reach the device this tick. Both carve-outs below suppress
+        # target=0 on readings that are indistinguishable from the ones a
+        # gate fires on — "Zen discharging while P1 imports" is precisely
+        # the EV-charging case inhibit_discharge exists to stop. Without
+        # this bypass the gate would flip the state and change nothing.
+        if inhibited:
+            return target, True, True
 
         # Don't kill a Zendure that's already charging from genuine surplus.
         # Two cases:

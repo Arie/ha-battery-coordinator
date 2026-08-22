@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
-from device_io import HWP1Meter, OptionalHASensor, ZendureDevice
+from device_io import HWP1Meter, OptionalHABinarySensor, OptionalHASensor, ZendureDevice
 
 
 class _FakeResponse:
@@ -505,3 +505,87 @@ class TestOptionalHASensorHTTPStatus:
         session = _FakeStateSession([{"status": 502, "payload": {}}])
         v = await sensor.read(session, now=0.0)
         assert v == 0.0
+
+
+class _FakeStateOnlySession:
+    """Serves a queue of HA /api/states responses for one entity."""
+
+    def __init__(self, scripted):
+        self._queue = list(scripted)
+
+    def get(self, url, headers=None, timeout=None):
+        if not self._queue:
+            return _FakeResponse(status=200, payload={})
+        return _FakeResponse(**self._queue.pop(0))
+
+
+class TestOptionalHABinarySensor:
+    """Gate entities decide whether the batteries run. Their failure mode
+    has to be 'behave exactly as before the feature existed', never
+    'start importing from the grid on a reading we could not confirm'."""
+
+    def _sensor(self, scripted, **kw):
+        return OptionalHABinarySensor("http://ha", "tok", "input_boolean.gate", **kw), _FakeStateOnlySession(scripted)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [
+            ("on", True),
+            ("ON", True),
+            ("true", True),
+            ("1", True),
+            ("yes", True),
+            ("off", False),
+            ("false", False),
+            ("0", False),
+            ("", False),
+        ],
+    )
+    async def test_state_parsing(self, state, expected):
+        sensor, session = self._sensor([{"status": 200, "payload": {"state": state}}])
+        assert await sensor.read(session, now=0) is expected
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_returns_false(self):
+        sensor = OptionalHABinarySensor("http://ha", "tok", "")
+        assert sensor.configured is False
+        assert await sensor.read(_FakeStateOnlySession([]), now=0) is False
+
+    @pytest.mark.asyncio
+    async def test_unavailable_falls_back_to_cache(self):
+        """A blip mid-EV-charge must not drop the gate and resume draining."""
+        sensor, session = self._sensor(
+            [
+                {"status": 200, "payload": {"state": "on"}},
+                {"status": 200, "payload": {"state": "unavailable"}},
+            ]
+        )
+        assert await sensor.read(session, now=0) is True
+        assert await sensor.read(session, now=10) is True
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_falls_open_to_false(self):
+        """Past the stale window, an indefinitely held gate is a stuck
+        controller, not a policy — revert to pre-feature behaviour."""
+        sensor, session = self._sensor(
+            [
+                {"status": 200, "payload": {"state": "on"}},
+                {"raise_on_get": ConnectionError("HA down")},
+            ],
+            max_stale_s=60,
+        )
+        assert await sensor.read(session, now=0) is True
+        assert await sensor.read(session, now=999) is False
+
+    @pytest.mark.asyncio
+    async def test_http_error_does_not_latch_true(self):
+        """An error envelope that happens to parse must never read as 'on'."""
+        sensor, session = self._sensor([{"status": 500, "payload": {"state": "on"}}])
+        assert await sensor.read(session, now=0) is False
+
+    @pytest.mark.asyncio
+    async def test_never_returns_true_before_a_successful_read(self):
+        """The force_charge case: no confirmed 'on' means no grid import."""
+        sensor, session = self._sensor([{"raise_on_get": ConnectionError("HA down")}])
+        assert await sensor.read(session, now=0) is False

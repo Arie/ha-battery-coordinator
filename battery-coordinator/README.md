@@ -34,6 +34,15 @@ Defaulted (edit only if your entity IDs differ):
 
 Up to 4 PIBs supported; each is treated as a first-class unit by the brain.
 
+Optional — dynamic tariffs:
+
+- **Hold-SOC entity** (`inhibit_discharge_entity`) — while on, the batteries stop discharging and hold their charge. Point it at a template sensor that goes on when power is cheap, or while an EV is charging.
+- **Stop-charging entity** (`inhibit_charge_entity`) — while on, the batteries stop charging.
+- **Grid-charge trigger entity** (`force_charge_entity`) — while on, the batteries charge from the grid at full rate. Requires **Allow grid charging**.
+- **Allow grid charging** (`allow_grid_charge`) — opts out of the "never charge from the grid" safety rule. Off by default. The add-on refuses to start if you enable it without a trigger entity.
+
+Any on/off entity works (`input_boolean`, `binary_sensor`, template). The brain has no price model by design — Home Assistant decides *when*, the add-on handles *how*. All four default to off, which behaves exactly as before. See the main repository README for worked automation examples.
+
 Brain tuning constants are pre-filled with production-tested defaults. Don't change them unless you know what you're doing — they're exposed for diagnostics.
 
 ## Operations
@@ -48,3 +57,11 @@ The Log tab shows live decisions like:
 ```
 
 Read it as: P1 grid power, per-PIB power and SOC, solar production, Zendure power and SOC, current state, and the target (with the diff vs current Zen power). State transitions are logged on their own line, e.g. `State: SLEEP → CHARGE`.
+
+An active tariff gate appears after the state: `🔒D` hold-SOC, `🔒C` stop-charging, `⚡F` grid-charge.
+
+```
+18:41:02  P1: +2180W  🔌 +0/+0W (78/81%)  ☀️    0W  🪫    +0W (64%)  [SLEEP] [🔒D] → hold (+0)
+```
+
+That line says the house is importing 2.2kW and the batteries are deliberately sitting it out.

@@ -26,6 +26,24 @@ options:
   # can't auto-flip discharge→charge at sunrise.
   solar_entity: ""
 
+  # ─── Dynamic-tariff gates (optional, via Home Assistant) ───
+  # Point each at any on/off entity (input_boolean, binary_sensor, template).
+  # The brain has no price model — HA automations decide, these carry the
+  # answer. Empty = feature off, identical to previous behaviour.
+  #   inhibit_discharge_entity: on → hold SOC (e.g. price is cheap, or the
+  #     EV is charging and you don't want the house battery paying for it)
+  #   inhibit_charge_entity:    on → stop charging (e.g. export is worth more)
+  #   force_charge_entity:      on → charge from the grid deliberately.
+  #     Requires allow_grid_charge below; ignored otherwise.
+  inhibit_discharge_entity: ""
+  inhibit_charge_entity: ""
+  force_charge_entity: ""
+
+  # Opt out of the "never charge from the grid" hard rule. Off by default.
+  # Only meaningful on a dynamic tariff where a cheap hour is worth banking
+  # against an expensive one. Needs force_charge_entity set.
+  allow_grid_charge: false
+
   # ─── PIB SOC + power via HA (defaults match the HomeWizard integration) ───
   # The HW P1 /api/batteries endpoint only gives combined power and no SOC,
   # so the per-PIB values must come from HA. Up to 4 batteries supported.
@@ -67,6 +85,10 @@ schema:
   hw_p1_token: password
 
   solar_entity: "str?"
+  inhibit_discharge_entity: "str?"
+  inhibit_charge_entity: "str?"
+  force_charge_entity: "str?"
+  allow_grid_charge: bool
 
   pib_soc_entities:
     - "match(^.+\\..+$)"

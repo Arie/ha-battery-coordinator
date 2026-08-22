@@ -90,10 +90,68 @@ The HW PIB **permissions API** (`charge_allowed` / `discharge_allowed`) is the l
 
 ### Hard rules
 
-- **Never charge from the grid.** Wake-to-charge requires sustained P1 export — if P1 is importing the brain stays out of CHARGE.
+- **Never charge from the grid.** Wake-to-charge requires sustained P1 export — if P1 is importing the brain stays out of CHARGE. (Opt-out: `allow_grid_charge`, see below.)
 - **Never discharge into export.** When P1 swings to export the brain flips out of DISCHARGE within `FLIP_S` (default 30s) and stops draining the battery into the meter.
 
 Both rules hold whether or not a solar sensor is configured — the brain uses P1 as the sole source of truth.
+
+## Dynamic tariffs
+
+The brain has no price model. It balances the meter, which is the right goal on a fixed tariff and the wrong one on a dynamic contract: an EV charging through a cheap hour looks like any other load, so the batteries empty themselves into it and have nothing left for the expensive evening peak.
+
+Rather than build a price model into a 1 Hz control loop, the add-on takes three optional on/off entities and lets Home Assistant decide. Any entity works — `input_boolean`, `binary_sensor`, or a template sensor comparing your price sensor to a threshold.
+
+| Option | While it is on |
+|--------|----------------|
+| `inhibit_discharge_entity` | Batteries stop discharging and hold their SOC |
+| `inhibit_charge_entity` | Batteries stop charging |
+| `force_charge_entity` | Batteries charge from the grid at full rate (needs `allow_grid_charge`) |
+
+All three default to empty, which is exactly the previous behaviour. Gates are evaluated before the state machine, so they override any state — including `DISCHARGE`, which has no "stop covering load" transition of its own. A gate that is on shows in the log line as `[🔒D]`, `[🔒C]`, or `[⚡F]`.
+
+If Home Assistant becomes unreachable, a gate holds its last value for 60 seconds and then reverts to off. A grid charge never starts on a reading the add-on could not confirm.
+
+### Holding SOC while the EV charges
+
+```yaml
+# configuration.yaml — on when power is cheap enough that you would rather
+# import than spend stored charge.
+template:
+  - binary_sensor:
+      - name: Hold battery SOC
+        state: >
+          {{ states('sensor.zonneplan_current_quarter_hourly_electricity_tariff')
+             | float(9) < 0.10 }}
+```
+
+Point `inhibit_discharge_entity` at `binary_sensor.hold_battery_soc`. Add `or is_state('sensor.ev_charger_status', 'charging')` if you never want the house battery paying for the car.
+
+Note the `float(9)` default: if the price sensor is ever unavailable the template falls back to an implausibly high price, so the gate reads *off* and the batteries keep behaving normally. Defaulting to `0` would do the opposite — an unavailable sensor would silently pin the batteries in hold. Check whether your tariff sensor reports the all-in price or the market price before picking a threshold; Zonneplan's quarter-hourly tariff updates every 15 minutes, so the gate re-evaluates on that cadence.
+
+### Charging from the grid when power is cheap
+
+Set `allow_grid_charge: true` **and** point `force_charge_entity` at an entity that is on during the hours you want to buy. This deliberately breaks the "never charge from the grid" rule, so it is off by default and the add-on refuses to start if you enable the flag without a trigger entity.
+
+```yaml
+template:
+  - binary_sensor:
+      - name: Grid charge now
+        state: >
+          {{ states('sensor.zonneplan_current_quarter_hourly_electricity_tariff')
+             | float(9) < 0.02
+             and states('sensor.zendure_soc') | float(100) < 80 }}
+```
+
+Two different trades hide behind "grid charging", and they do not have the same answer:
+
+- **Import cheap, self-consume at the peak.** Gain is the price spread minus round-trip losses (~10–15%). Net metering is irrelevant here — nothing is exported — so this works both before and after the scheme ends.
+- **Import cheap, export later.** Under net metering the exported kWh nets at the same rate, so there is nothing to win.
+
+The gate above targets the first. Work out your own numbers before enabling it. `inhibit_charge_entity` always wins over `force_charge_entity`, so a stop request can never be overridden by a stuck automation.
+
+### Never feeding back
+
+The batteries are held to a no-export invariant, tested closed-loop (`TestNeverFeedsBackToGrid`, `TestPIBsNeverFeedBack`): the Zendure stops rather than hold its minimum output into a surplus, and the PIBs lose `discharge_allowed` whenever sustained export appears. Solar itself still exports normally — the guarantee covers battery output only.
 
 ## Repository layout
 

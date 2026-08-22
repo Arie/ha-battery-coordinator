@@ -26,13 +26,14 @@ Minimize grid import/export by coordinating multiple battery systems with solar 
 
 ## Architecture
 
-The brain is `PermissionFSM` (`battery-coordinator/app/brains/permission_fsm.py`) — a finite-state machine over five states.
+The brain is `PermissionFSM` (`battery-coordinator/app/brains/permission_fsm.py`) — a finite-state machine over six states.
 
 ### States
 
 ```
 SLEEP ─── all standby
 CHARGE ─── PIBs zero-mode (charge-only), Zen at fixed step OR NOM
+GRID_CHARGE ─── deliberate grid import (opt-in), Zen at max, PIBs to_full
 DISCHARGE ─── Zen NOM-tracks P1, PIBs in standby
 DISCHARGE_HELP ─── Zen pinned at max, PIBs help discharge
 PIB_DISCHARGE ─── Zen off, PIBs discharge alone
@@ -45,6 +46,38 @@ Transitions are data, defined in a transition table on the brain (state → list
 The Zendure runs at one of `[0, 200, 400, 800, 1200, 1600, 2000, 2400]` watts in stepped mode while PIBs are the fast P1 tracker. When all PIBs enter taper (or hit 100%), the Zendure switches to its own NOM tracking: `target = zen_power - p1`.
 
 The boundary tick is clamped to `current_step + 400` to avoid a ~1.4kW jump that would overshoot.
+
+### Tariff gates
+
+The brain has no price model — on a dynamic tariff, "zero the meter" is the
+wrong objective during a cheap hour. Three booleans on `Reading`
+(`inhibit_discharge`, `inhibit_charge`, `force_charge`) carry external
+policy in from HA entities; the add-on supplies mechanism, HA automations
+supply policy.
+
+`_apply_gates()` runs in `decide()` **before** `_check_transitions()`, because
+a gate must be able to override a state whose own table would keep it there
+(`DISCHARGE` has no "stop covering load" guard — that is its job).
+`_check_transitions()` additionally vetoes any transition whose destination is
+inhibited, resetting its holdoff timer, so a transition cannot sit armed
+through the gated window and fire the instant it lifts.
+
+Two subtleties worth preserving:
+
+- An inhibit-forced `target=0` bypasses both `_should_send` carve-outs. Those
+  suppress `target=0` on readings indistinguishable from the ones gates fire
+  on — "Zen discharging while P1 imports" is exactly the EV case — so without
+  the bypass the gate would flip state and change nothing.
+- The bypass is naturally one-tick: once the gate forces `SLEEP`, `SLEEP` is
+  not itself inhibited, so `_apply_gates()` returns `None` on the next tick and
+  normal send throttling resumes. This matters because `main.py` maps
+  `target=0` in `SLEEP` to a **flash** write; a permanently armed bypass would
+  burn flash at 1 Hz for as long as the gate was held. Pinned by
+  `TestGateDoesNotSpamTheDevice`.
+
+`GRID_CHARGE` is entered and left only by the gate, so its transition table is
+deliberately empty — two mechanisms owning one state would disagree.
+`allow_grid_charge` defaults off and `inhibit_charge` outranks `force_charge`.
 
 ### Key safety mechanisms
 
@@ -102,6 +135,7 @@ tests/
   test_invariants.py      Property-based + scenario tests on the brain
   test_n_pibs.py          Brain handles 1/2/3/4 PIBs
   test_packaging.py       pyproject / config.yaml / CHANGELOG version pin
+  test_tariff_gates.py    Inhibit gates, grid charge, flash-wear on held gates
 ```
 
 ## Pre-commit gate
@@ -168,3 +202,17 @@ Brain defaults live in `PermissionFSM.DEFAULTS` (canonical), with class constant
 | ZEN_MAXED_FRAC | 0.95 | Zen at this fraction of max → considered maxed |
 | ZEN_HELP_EXIT_FRAC | 0.8 | Total discharge below this → PIBs redundant |
 | EXPORT_HYST_W | 25W | Hysteresis on the DISCHARGE hold-off (stop at 50W demand, resume at 75W) |
+
+## Tariff-gate options
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| inhibit_discharge_entity | "" | HA on/off entity; on → hold SOC |
+| inhibit_charge_entity | "" | HA on/off entity; on → stop charging |
+| force_charge_entity | "" | HA on/off entity; on → grid-charge at max |
+| allow_grid_charge | false | Opt out of the never-charge-from-grid rule |
+
+Gate entities are read through `OptionalHABinarySensor`, which wraps the same
+retry/staleness contract as `OptionalHASensor` and fails closed to `False`
+after 60s — an unreachable HA reverts to pre-feature behaviour and can never
+start a grid charge.

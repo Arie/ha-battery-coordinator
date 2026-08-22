@@ -418,3 +418,82 @@ class TestValidate:
         )
         c = Config(options_path=str(path))
         assert c.validate() == []
+
+
+class TestTariffGateOptions:
+    """Gate entities + the grid-charge opt-in load from both config paths."""
+
+    def test_gate_entities_default_empty(self, monkeypatch):
+        monkeypatch.setattr(Config, "_options_path", "/nonexistent", raising=False)
+        c = Config()
+        c._set_defaults()
+        assert c.inhibit_discharge_entity == ""
+        assert c.inhibit_charge_entity == ""
+        assert c.force_charge_entity == ""
+        assert c.allow_grid_charge is False
+
+    def test_gate_entities_from_options(self):
+        c = Config()
+        c._set_defaults()
+        c._load_from_options(
+            {
+                "zendure_ip": "1.2.3.4",
+                "hw_p1_ip": "1.2.3.5",
+                "hw_p1_token": "tok",
+                "inhibit_discharge_entity": "input_boolean.hold_soc",
+                "inhibit_charge_entity": "input_boolean.no_charge",
+                "force_charge_entity": "input_boolean.cheap_power",
+                "allow_grid_charge": True,
+            }
+        )
+        assert c.inhibit_discharge_entity == "input_boolean.hold_soc"
+        assert c.allow_grid_charge is True
+
+    def test_gate_entities_require_ha_proxy(self):
+        """A gate entity alone must still pull in the HA connection."""
+        c = Config()
+        c._set_defaults()
+        c._load_from_options(
+            {
+                "zendure_ip": "1.2.3.4",
+                "hw_p1_ip": "1.2.3.5",
+                "hw_p1_token": "tok",
+                "inhibit_discharge_entity": "input_boolean.hold_soc",
+            }
+        )
+        assert c.ha_url == "http://supervisor/core"
+
+    def test_allow_grid_charge_without_trigger_is_an_error(self):
+        """Opting out of a safety rule with no way to trigger it is a typo."""
+        c = Config()
+        c._set_defaults()
+        c.zendure_ip = "1.2.3.4"
+        c.hw_p1_ip = "1.2.3.5"
+        c.hw_p1_token = "tok"
+        c.allow_grid_charge = True
+        c.force_charge_entity = ""
+        errors = c.validate()
+        assert any("force_charge_entity" in e for e in errors)
+
+    def test_allow_grid_charge_with_trigger_validates(self):
+        c = Config()
+        c._set_defaults()
+        c.zendure_ip = "1.2.3.4"
+        c.hw_p1_ip = "1.2.3.5"
+        c.hw_p1_token = "tok"
+        c.ha_url = "http://supervisor/core"
+        c.ha_token = "tok"
+        c.allow_grid_charge = True
+        c.force_charge_entity = "input_boolean.cheap_power"
+        assert c.validate() == []
+
+    def test_env_path_reads_gates(self, monkeypatch):
+        monkeypatch.setenv("INHIBIT_DISCHARGE_ENTITY", "binary_sensor.cheap")
+        monkeypatch.setenv("FORCE_CHARGE_ENTITY", "input_boolean.fill")
+        monkeypatch.setenv("ALLOW_GRID_CHARGE", "true")
+        c = Config()
+        c._set_defaults()
+        c._load_from_env()
+        assert c.inhibit_discharge_entity == "binary_sensor.cheap"
+        assert c.force_charge_entity == "input_boolean.fill"
+        assert c.allow_grid_charge is True

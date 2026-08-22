@@ -85,6 +85,10 @@ class Config:
         self.ha_url = ""
         self.ha_token = ""
         self.solar_entity = ""
+        self.inhibit_discharge_entity = ""
+        self.inhibit_charge_entity = ""
+        self.force_charge_entity = ""
+        self.allow_grid_charge = False
         self.pib_soc_entities: list[str] = []
         self.pib_power_entities: list[str] = []
         self.zen_max_charge_w = 2400
@@ -112,7 +116,11 @@ class Config:
         # Solar via HA, plus the PIB entity reads, both go through the
         # supervisor proxy with the token Supervisor injects.
         self.solar_entity = o.get("solar_entity", "") or ""
-        needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities)
+        self.inhibit_discharge_entity = o.get("inhibit_discharge_entity", "") or ""
+        self.inhibit_charge_entity = o.get("inhibit_charge_entity", "") or ""
+        self.force_charge_entity = o.get("force_charge_entity", "") or ""
+        self.allow_grid_charge = bool(o.get("allow_grid_charge", False))
+        needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities or self._gate_entities())
         if needs_ha:
             self.ha_url = "http://supervisor/core"
             self.ha_token = os.getenv("SUPERVISOR_TOKEN", "")
@@ -144,6 +152,10 @@ class Config:
         self.hw_p1_token = os.getenv("HW_P1_TOKEN", "")
 
         self.solar_entity = os.getenv("SOLAR_ENTITY", "")
+        self.inhibit_discharge_entity = os.getenv("INHIBIT_DISCHARGE_ENTITY", "")
+        self.inhibit_charge_entity = os.getenv("INHIBIT_CHARGE_ENTITY", "")
+        self.force_charge_entity = os.getenv("FORCE_CHARGE_ENTITY", "")
+        self.allow_grid_charge = os.getenv("ALLOW_GRID_CHARGE", "").lower() in ("1", "true", "yes")
         # Comma-separated env vars in standalone mode, e.g.
         # PIB_SOC_ENTITIES="sensor.pib_soc,sensor.pib_soc_2"
         self.pib_soc_entities = _split_csv(os.getenv("PIB_SOC_ENTITIES", ""))[:4]
@@ -184,9 +196,17 @@ class Config:
         # Any HA-backed entity needs the HA proxy. Same check for solar,
         # pib_soc, and pib_power so a user setting one without the others
         # still gets a clear error.
-        needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities)
+        needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities or self._gate_entities())
         if needs_ha and not self.ha_url:
-            errors.append("ha_url is required when solar_entity or pib_*_entities are set")
+            errors.append("ha_url is required when solar_entity, pib_*_entities, or gate entities are set")
+        # allow_grid_charge without a force_charge_entity is inert — nothing
+        # can ever assert the signal. Flag it rather than silently doing
+        # nothing, since the user explicitly opted out of a safety rule and
+        # will otherwise assume it took effect.
+        if self.allow_grid_charge and not self.force_charge_entity:
+            errors.append(
+                "allow_grid_charge is enabled but force_charge_entity is empty — nothing can trigger a grid charge"
+            )
         if self.ha_url and not self.ha_token:
             errors.append("ha_token is required when ha_url is set")
         if self.zen_soc_min >= self.zen_soc_max:
@@ -225,6 +245,10 @@ class Config:
                 f"have the same length — the brain pairs them by index"
             )
         return errors
+
+    def _gate_entities(self) -> list[str]:
+        """The configured tariff-gate entities, if any."""
+        return [e for e in (self.inhibit_discharge_entity, self.inhibit_charge_entity, self.force_charge_entity) if e]
 
     def brain_kwargs(self) -> dict[str, int]:
         """Kwargs for PermissionFSM(...)."""
