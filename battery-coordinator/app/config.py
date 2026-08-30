@@ -88,7 +88,9 @@ class Config:
         self.inhibit_discharge_entity = ""
         self.inhibit_charge_entity = ""
         self.force_charge_entity = ""
+        self.force_discharge_entity = ""
         self.allow_grid_charge = False
+        self.allow_grid_export = False
         self.pib_soc_entities: list[str] = []
         self.pib_power_entities: list[str] = []
         self.zen_max_charge_w = 2400
@@ -119,7 +121,9 @@ class Config:
         self.inhibit_discharge_entity = o.get("inhibit_discharge_entity", "") or ""
         self.inhibit_charge_entity = o.get("inhibit_charge_entity", "") or ""
         self.force_charge_entity = o.get("force_charge_entity", "") or ""
+        self.force_discharge_entity = o.get("force_discharge_entity", "") or ""
         self.allow_grid_charge = bool(o.get("allow_grid_charge", False))
+        self.allow_grid_export = bool(o.get("allow_grid_export", False))
         needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities or self._gate_entities())
         if needs_ha:
             self.ha_url = "http://supervisor/core"
@@ -155,7 +159,9 @@ class Config:
         self.inhibit_discharge_entity = os.getenv("INHIBIT_DISCHARGE_ENTITY", "")
         self.inhibit_charge_entity = os.getenv("INHIBIT_CHARGE_ENTITY", "")
         self.force_charge_entity = os.getenv("FORCE_CHARGE_ENTITY", "")
+        self.force_discharge_entity = os.getenv("FORCE_DISCHARGE_ENTITY", "")
         self.allow_grid_charge = os.getenv("ALLOW_GRID_CHARGE", "").lower() in ("1", "true", "yes")
+        self.allow_grid_export = os.getenv("ALLOW_GRID_EXPORT", "").lower() in ("1", "true", "yes")
         # Comma-separated env vars in standalone mode, e.g.
         # PIB_SOC_ENTITIES="sensor.pib_soc,sensor.pib_soc_2"
         self.pib_soc_entities = _split_csv(os.getenv("PIB_SOC_ENTITIES", ""))[:4]
@@ -203,6 +209,10 @@ class Config:
         # can ever assert the signal. Flag it rather than silently doing
         # nothing, since the user explicitly opted out of a safety rule and
         # will otherwise assume it took effect.
+        if self.allow_grid_export and not self.force_discharge_entity:
+            errors.append(
+                "allow_grid_export is enabled but force_discharge_entity is empty — nothing can trigger an export"
+            )
         if self.allow_grid_charge and not self.force_charge_entity:
             errors.append(
                 "allow_grid_charge is enabled but force_charge_entity is empty — nothing can trigger a grid charge"
@@ -248,7 +258,16 @@ class Config:
 
     def _gate_entities(self) -> list[str]:
         """The configured tariff-gate entities, if any."""
-        return [e for e in (self.inhibit_discharge_entity, self.inhibit_charge_entity, self.force_charge_entity) if e]
+        return [
+            e
+            for e in (
+                self.inhibit_discharge_entity,
+                self.inhibit_charge_entity,
+                self.force_charge_entity,
+                self.force_discharge_entity,
+            )
+            if e
+        ]
 
     def brain_kwargs(self) -> dict[str, int]:
         """Kwargs for PermissionFSM(...)."""

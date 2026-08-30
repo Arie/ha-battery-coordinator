@@ -264,3 +264,103 @@ class TestGateDoesNotSpamTheDevice:
         brain = PermissionFSM(allow_grid_charge=True)
         ds = _run(brain, _r(p1=500, zen_soc=40, force_charge=True), ticks=700)
         assert _modes(ds).count("to_full") >= 2
+
+
+class TestForceDischarge:
+    """Deliberate max-rate discharge, exporting the surplus.
+
+    This is the one gate that switches OFF a safety rule rather than adding
+    one, so it needs its own opt-in (`allow_grid_export`) — distinct from
+    `allow_grid_charge`, which gates import. Only the Zendure can export:
+    the PIBs have no watt setpoint and no discharge-regardless mode, so they
+    only ever cover real load.
+    """
+
+    def test_ignored_when_export_not_allowed(self):
+        """Default off — the no-export rule still stands."""
+        brain = PermissionFSM()
+        d = _settle(brain, _r(p1=200, zen_soc=80, force_discharge=True), ticks=300)
+        assert _state(brain) != State.FORCE_DISCHARGE
+        assert d.target >= -PermissionFSM().max_discharge  # no forced max
+
+    def test_discharges_at_max_when_allowed(self):
+        brain = PermissionFSM(allow_grid_export=True)
+        ds = _run(brain, _r(p1=200, zen_soc=80, force_discharge=True), ticks=10)
+        assert _state(brain) == State.FORCE_DISCHARGE
+        assert ds[-1].target == -brain.max_discharge
+
+    def test_pibs_are_never_charge_enabled_while_exporting(self):
+        """The cross-charge trap: PIBs in zero mode would see the Zendure's
+        export as surplus and absorb it, charging off our own output."""
+        brain = PermissionFSM(allow_grid_export=True)
+        ds = _run(brain, _r(p1=200, zen_soc=80, force_discharge=True), ticks=10)
+        perms = [d.pib_permissions for d in ds if d.pib_permissions is not None]
+        assert perms, "no PIB permissions emitted on entry"
+        for p in perms:
+            assert "charge_allowed" not in p, f"PIBs could absorb our own export: {p}"
+            assert p == ["discharge_allowed"]
+
+    def test_keeps_exporting_instead_of_backing_off(self):
+        """The whole point: it must survive the guards that normally stop an
+        export — the pilot-floor hold-off and the DISCHARGE->CHARGE flip."""
+        brain = PermissionFSM(allow_grid_export=True)
+        zen = 0.0
+        targets = []
+        for i in range(400):
+            p1 = 150 + zen  # tiny house load; zen negative => grid export
+            d = brain.decide(_r(p1=p1, zen_power=zen, zen_soc=80, force_discharge=True), t=i)
+            targets.append(d.target)
+            zen += (d.target - zen) * 0.5
+        assert _state(brain) == State.FORCE_DISCHARGE, f"fell out to {_state(brain)}"
+        assert targets[-1] == -brain.max_discharge
+        assert zen < -2000, f"settled at {zen:.0f}W, not exporting at max"
+
+    def test_no_export_invariant_still_holds_when_flag_is_off(self):
+        """Regression guard: the opt-in must not weaken the default path."""
+        brain = PermissionFSM()  # allow_grid_export defaults False
+        zen = 0.0
+        for i in range(400):
+            p1 = 150 + zen
+            d = brain.decide(_r(p1=p1, zen_power=zen, zen_soc=80), t=i)
+            zen += (d.target - zen) * 0.5
+        assert zen > -50, f"exported {abs(zen):.0f}W with the flag off"
+
+    def test_inhibit_discharge_beats_force_discharge(self):
+        brain = PermissionFSM(allow_grid_export=True)
+        d = _settle(
+            brain,
+            _r(p1=200, zen_soc=80, force_discharge=True, inhibit_discharge=True),
+            ticks=10,
+        )
+        assert _state(brain) != State.FORCE_DISCHARGE
+        assert d.target == 0
+
+    def test_force_charge_beats_force_discharge(self):
+        """Contradictory commands resolve to charging, never a relay fight."""
+        brain = PermissionFSM(allow_grid_charge=True, allow_grid_export=True)
+        d = _settle(
+            brain,
+            _r(p1=200, zen_soc=40, force_discharge=True, force_charge=True),
+            ticks=10,
+        )
+        assert _state(brain) == State.GRID_CHARGE
+        assert d.target > 0
+
+    def test_stops_at_the_soc_floor(self):
+        brain = PermissionFSM(allow_grid_export=True, zen_soc_min=20)
+        d = _settle(brain, _r(p1=200, zen_soc=20, force_discharge=True), ticks=10)
+        assert _state(brain) != State.FORCE_DISCHARGE
+        assert d.target == 0
+
+    def test_release_returns_to_normal_control(self):
+        brain = PermissionFSM(allow_grid_export=True)
+        _settle(brain, _r(p1=200, zen_soc=80, force_discharge=True), ticks=10)
+        assert _state(brain) == State.FORCE_DISCHARGE
+        _settle(brain, _r(p1=1500, zen_soc=80), ticks=100, t0=10)
+        assert _state(brain) == State.DISCHARGE
+
+    def test_permissions_reasserted_on_the_pib_heartbeat(self):
+        brain = PermissionFSM(allow_grid_export=True)
+        ds = _run(brain, _r(p1=200, zen_soc=80, force_discharge=True), ticks=700)
+        emitted = [d.pib_permissions for d in ds if d.pib_permissions is not None]
+        assert len(emitted) >= 2, "desired PIB state never re-asserted"

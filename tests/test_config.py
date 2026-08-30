@@ -497,3 +497,48 @@ class TestTariffGateOptions:
         assert c.inhibit_discharge_entity == "binary_sensor.cheap"
         assert c.force_charge_entity == "input_boolean.fill"
         assert c.allow_grid_charge is True
+
+    def test_force_discharge_options_from_options(self):
+        c = Config()
+        c._set_defaults()
+        c._load_from_options(
+            {
+                "zendure_ip": "1.2.3.4",
+                "hw_p1_ip": "1.2.3.5",
+                "hw_p1_token": "tok",
+                "force_discharge_entity": "input_boolean.dump_now",
+                "allow_grid_export": True,
+            }
+        )
+        assert c.force_discharge_entity == "input_boolean.dump_now"
+        assert c.allow_grid_export is True
+        assert c.ha_url == "http://supervisor/core"
+
+    def test_allow_grid_export_without_trigger_is_an_error(self):
+        """Opting out of the no-export rule with no way to trigger it is a typo."""
+        c = Config()
+        c._set_defaults()
+        c.zendure_ip, c.hw_p1_ip, c.hw_p1_token = "1.2.3.4", "1.2.3.5", "tok"
+        c.allow_grid_export = True
+        c.force_discharge_entity = ""
+        assert any("force_discharge_entity" in e for e in c.validate())
+
+    def test_export_and_charge_flags_are_independent(self):
+        """allow_grid_charge must not imply allow_grid_export or vice versa."""
+        c = Config()
+        c._set_defaults()
+        c.zendure_ip, c.hw_p1_ip, c.hw_p1_token = "1.2.3.4", "1.2.3.5", "tok"
+        c.ha_url, c.ha_token = "http://supervisor/core", "tok"
+        c.allow_grid_charge = True
+        c.force_charge_entity = "input_boolean.cheap"
+        assert c.allow_grid_export is False
+        assert c.validate() == []
+
+    def test_env_path_reads_export_flags(self, monkeypatch):
+        monkeypatch.setenv("FORCE_DISCHARGE_ENTITY", "input_boolean.dump")
+        monkeypatch.setenv("ALLOW_GRID_EXPORT", "true")
+        c = Config()
+        c._set_defaults()
+        c._load_from_env()
+        assert c.force_discharge_entity == "input_boolean.dump"
+        assert c.allow_grid_export is True

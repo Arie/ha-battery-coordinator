@@ -29,6 +29,7 @@ class Reading:
 
     __slots__ = (
         "force_charge",
+        "force_discharge",
         "inhibit_charge",
         "inhibit_discharge",
         "p1",
@@ -51,6 +52,7 @@ class Reading:
         inhibit_discharge: bool = False,
         inhibit_charge: bool = False,
         force_charge: bool = False,
+        force_discharge: bool = False,
     ):
         self.p1 = p1
         self.pibs = list(pibs)
@@ -61,6 +63,7 @@ class Reading:
         self.inhibit_discharge = inhibit_discharge
         self.inhibit_charge = inhibit_charge
         self.force_charge = force_charge
+        self.force_discharge = force_discharge
 
         if len(self.pibs) != len(self.pib_socs):
             raise ValueError(
@@ -77,7 +80,7 @@ class Reading:
             f"Reading(p1={self.p1}, pibs={self.pibs}, pib_socs={self.pib_socs}, "
             f"zen_power={self.zen_power}, zen_soc={self.zen_soc}, solar={self.solar}, "
             f"inhibit_discharge={self.inhibit_discharge}, inhibit_charge={self.inhibit_charge}, "
-            f"force_charge={self.force_charge})"
+            f"force_charge={self.force_charge}, force_discharge={self.force_discharge})"
         )
 
 

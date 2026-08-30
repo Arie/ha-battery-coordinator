@@ -26,7 +26,7 @@ Minimize grid import/export by coordinating multiple battery systems with solar 
 
 ## Architecture
 
-The brain is `PermissionFSM` (`battery-coordinator/app/brains/permission_fsm.py`) — a finite-state machine over six states.
+The brain is `PermissionFSM` (`battery-coordinator/app/brains/permission_fsm.py`) — a finite-state machine over seven states.
 
 ### States
 
@@ -34,6 +34,7 @@ The brain is `PermissionFSM` (`battery-coordinator/app/brains/permission_fsm.py`
 SLEEP ─── all standby
 CHARGE ─── PIBs zero-mode (charge-only), Zen at fixed step OR NOM
 GRID_CHARGE ─── deliberate grid import (opt-in), Zen at max, PIBs to_full
+FORCE_DISCHARGE ─── deliberate export (opt-in), Zen at max discharge
 DISCHARGE ─── Zen NOM-tracks P1, PIBs in standby
 DISCHARGE_HELP ─── Zen pinned at max, PIBs help discharge
 PIB_DISCHARGE ─── Zen off, PIBs discharge alone
@@ -78,6 +79,19 @@ Two subtleties worth preserving:
 `GRID_CHARGE` is entered and left only by the gate, so its transition table is
 deliberately empty — two mechanisms owning one state would disagree.
 `allow_grid_charge` defaults off and `inhibit_charge` outranks `force_charge`.
+
+`FORCE_DISCHARGE` is the same shape, and its empty table is load-bearing for a
+second reason: it is what exempts the state from `_discharge_held_off` and the
+`DISCHARGE->CHARGE` flip, both of which exist to prevent exactly the export it
+performs. `allow_grid_export` is a **separate** flag from `allow_grid_charge` —
+one gates import, the other export, and conflating them would let an opt-out of
+one rule silently disable the other.
+
+Only the Zendure can export: the PIBs have no power setpoint (`target_power_w`
+is read-only) and no discharge-regardless mode, so the ceiling is ~2400W rather
+than the fleet's 4000W. During a forced export the PIBs are held to
+`discharge_allowed` only — with `charge_allowed` they would read the negative P1
+the Zendure creates as surplus and charge off our own output.
 
 ### Key safety mechanisms
 
@@ -211,6 +225,8 @@ Brain defaults live in `PermissionFSM.DEFAULTS` (canonical), with class constant
 | inhibit_charge_entity | "" | HA on/off entity; on → stop charging |
 | force_charge_entity | "" | HA on/off entity; on → grid-charge at max |
 | allow_grid_charge | false | Opt out of the never-charge-from-grid rule |
+| force_discharge_entity | "" | HA on/off entity; on → discharge at max, exporting |
+| allow_grid_export | false | Opt out of the never-discharge-into-export rule |
 
 Gate entities are read through `OptionalHABinarySensor`, which wraps the same
 retry/staleness contract as `OptionalHASensor` and fails closed to `False`

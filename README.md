@@ -91,7 +91,7 @@ The HW PIB **permissions API** (`charge_allowed` / `discharge_allowed`) is the l
 ### Hard rules
 
 - **Never charge from the grid.** Wake-to-charge requires sustained P1 export — if P1 is importing the brain stays out of CHARGE. (Opt-out: `allow_grid_charge`, see below.)
-- **Never discharge into export.** When P1 swings to export the brain flips out of DISCHARGE within `FLIP_S` (default 30s) and stops draining the battery into the meter.
+- **Never discharge into export.** When P1 swings to export the brain flips out of DISCHARGE within `FLIP_S` (default 30s) and stops draining the battery into the meter. (Opt-out: `allow_grid_export`, see below.)
 
 Both rules hold whether or not a solar sensor is configured — the brain uses P1 as the sole source of truth.
 
@@ -106,6 +106,7 @@ Rather than build a price model into a 1 Hz control loop, the add-on takes three
 | `inhibit_discharge_entity` | Batteries stop discharging and hold their SOC |
 | `inhibit_charge_entity` | Batteries stop charging |
 | `force_charge_entity` | Batteries charge from the grid at full rate (needs `allow_grid_charge`) |
+| `force_discharge_entity` | Zendure discharges at full rate, exporting the surplus (needs `allow_grid_export`) |
 
 All three default to empty, which is exactly the previous behaviour. Gates are evaluated before the state machine, so they override any state — including `DISCHARGE`, which has no "stop covering load" transition of its own. A gate that is on shows in the log line as `[🔒D]`, `[🔒C]`, or `[⚡F]`.
 
@@ -148,6 +149,22 @@ Two different trades hide behind "grid charging", and they do not have the same 
 - **Import cheap, export later.** Under net metering the exported kWh nets at the same rate, so there is nothing to win.
 
 The gate above targets the first. Work out your own numbers before enabling it. `inhibit_charge_entity` always wins over `force_charge_entity`, so a stop request can never be overridden by a stuck automation.
+
+### Forcing an export
+
+`force_discharge_entity` is the mirror of `force_charge_entity`, and it needs its own opt-in — `allow_grid_export`, not `allow_grid_charge`. Those are two different rules: one governs importing to charge, the other exporting to discharge. Enabling one must never imply the other.
+
+**Only the Zendure can export.** The plug-in batteries expose no power setpoint (`target_power_w` is read-only in the HomeWizard API) and have no discharge-regardless mode, so in `zero` mode they only ever cover real household load. The practical ceiling is therefore ~2400W, not the fleet's 4000W:
+
+| House load | Zendure | PIBs | Exported |
+|---|---|---|---|
+| 7300 W | 2400 W | 1600 W | 0 |
+| 2000 W | 2400 W | idle | 400 W |
+| 300 W | 2400 W | idle | 2100 W |
+
+For the duration the PIBs are held to `discharge_allowed` only. Granting them `charge_allowed` would let them read the negative P1 the Zendure is creating as solar-like surplus and charge from the export — the batteries funding each other in a circle while the meter runs.
+
+Whether this pays depends entirely on your contract. Under net metering an exported kWh nets at retail, so there is little to win; it becomes interesting once that ends.
 
 ### Never feeding back
 

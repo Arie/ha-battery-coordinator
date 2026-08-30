@@ -40,6 +40,7 @@ class State(Enum):
     SLEEP = "SLEEP"
     CHARGE = "CHARGE"
     GRID_CHARGE = "GRID_CHARGE"
+    FORCE_DISCHARGE = "FORCE_DISCHARGE"
     DISCHARGE = "DISCHARGE"
     DISCHARGE_HELP = "DISCHARGE_HELP"
     PIB_DISCHARGE = "PIB_DISCHARGE"
@@ -68,6 +69,7 @@ class PermissionFSM:
       SLEEP          – all standby
       CHARGE         – PIBs zero (charge-only), Zendure at fixed step or NOM
       GRID_CHARGE    – deliberate grid import (opt-in), PIBs to_full
+      FORCE_DISCHARGE– deliberate max discharge into export (opt-in)
       DISCHARGE      – Zendure NOM-tracks P1 solo, PIBs standby
       DISCHARGE_HELP – Zendure maxed, PIBs helping (discharge-only)
       PIB_DISCHARGE  – Zendure off, PIBs discharge alone
@@ -164,6 +166,11 @@ class PermissionFSM:
         # rule becomes a policy choice — but it stays off by default and
         # still requires an explicit per-tick force_charge signal.
         allow_grid_charge: bool = False,
+        # Opt-in escape hatch from the "never discharge into export" rule.
+        # Distinct from allow_grid_charge, which gates import — these are two
+        # different safety rules and conflating them would let one opt-out
+        # silently enable the other.
+        allow_grid_export: bool = False,
         # Brain tuning — exposed via add-on options. Defaults match the
         # production-tested class constants above; instance attributes
         # below shadow those constants so per-instance overrides work
@@ -187,6 +194,7 @@ class PermissionFSM:
         self.zen_soc_max = zen_soc_max
         self.zen_soc_min = zen_soc_min
         self.allow_grid_charge = allow_grid_charge
+        self.allow_grid_export = allow_grid_export
 
         # Per-instance overrides for the tunables. None = use class default.
         if step_holdoff_s is not None:
@@ -422,6 +430,11 @@ class PermissionFSM:
             # ahead of the table. Leaving it empty keeps the two mechanisms
             # from disagreeing about who owns the state.
             State.GRID_CHARGE: [],
+            # Same reasoning as GRID_CHARGE: gate-owned, so no table entries.
+            # Keeping it empty is also what exempts it from the pilot-floor
+            # hold-off and the DISCHARGE->CHARGE flip, both of which exist to
+            # stop exactly the export this state is for.
+            State.FORCE_DISCHARGE: [],
             State.PIB_DISCHARGE: [
                 # Solar returns → charge
                 (
@@ -532,6 +545,7 @@ class PermissionFSM:
     _INHIBITED_BY: ClassVar[dict[State, str]] = {
         State.CHARGE: "inhibit_charge",
         State.GRID_CHARGE: "inhibit_charge",
+        State.FORCE_DISCHARGE: "inhibit_discharge",
         State.DISCHARGE: "inhibit_discharge",
         State.DISCHARGE_HELP: "inhibit_discharge",
         State.PIB_DISCHARGE: "inhibit_discharge",
@@ -558,6 +572,20 @@ class PermissionFSM:
         room = r.zen_soc < self.zen_soc_max or any(s < 99 for s in r.pib_socs)
         return room
 
+    def _wants_force_discharge(self, r: Reading) -> bool:
+        """Deliberate max-rate discharge requested, permitted, and possible.
+
+        inhibit_discharge outranks it, mirroring inhibit_charge vs
+        force_charge: a stop request always beats a go request. The SOC floor
+        is checked here as well as in decide()'s clamp so the state is never
+        entered with nothing left to give.
+        """
+        if not (self.allow_grid_export and r.force_discharge):
+            return False
+        if r.inhibit_discharge:
+            return False
+        return r.zen_soc > self.zen_soc_min
+
     def _apply_gates(self, r: Reading, t: float) -> tuple[str | None, list[str] | None, bool] | None:
         """Run the external gates ahead of the transition table.
 
@@ -581,6 +609,25 @@ class PermissionFSM:
         # Drop to SLEEP rather than guessing — the normal wake guards pick
         # the right successor from the next few seconds of P1.
         if self.state == State.GRID_CHARGE:
+            self.state = State.SLEEP
+            self._init_step_for_new_state()
+            return "standby", None, False
+
+        # Force discharge is checked after grid charge, so force_charge wins
+        # if both are somehow asserted — charging is the safer resolution of a
+        # contradiction than slamming the relay the other way.
+        if self._wants_force_discharge(r):
+            if self.state != State.FORCE_DISCHARGE:
+                self.state = State.FORCE_DISCHARGE
+                self._init_step_for_new_state()
+                # discharge_allowed ONLY. In zero mode the PIBs read the
+                # negative P1 the Zendure is creating as surplus and would
+                # charge from our own export; withholding charge_allowed is
+                # the hardware lock that prevents it.
+                return "zero", ["discharge_allowed"], False
+            return None, None, False
+
+        if self.state == State.FORCE_DISCHARGE:
             self.state = State.SLEEP
             self._init_step_for_new_state()
             return "standby", None, False
@@ -646,6 +693,12 @@ class PermissionFSM:
         """Compute Zendure target power for current state."""
         if self.state == State.SLEEP:
             return 0
+
+        if self.state == State.FORCE_DISCHARGE:
+            # Mirror of GRID_CHARGE: exporting is the deliberate intent, so
+            # P1 carries no signal worth tracking. Flat max rate; the SOC
+            # clamp in decide() is what stops it.
+            return -self.max_discharge
 
         if self.state == State.GRID_CHARGE:
             # No NOM, no stepping: importing is the point, so P1 carries no

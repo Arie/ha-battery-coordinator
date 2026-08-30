@@ -21,6 +21,12 @@ configuration:
   force_charge_entity:
     name: Grid-charge trigger entity (optional)
     description: Any HA on/off entity. While it is on the batteries charge from the grid at full rate, regardless of what the meter reads. Requires "Allow grid charging" below; ignored without it.
+  force_discharge_entity:
+    name: Force-discharge trigger entity (optional)
+    description: Any HA on/off entity. While it is on the batteries discharge at full rate regardless of household demand, feeding any surplus to the grid. Only the Zendure can export (max 2400W); the plug-in batteries have no power setpoint and will only ever cover real load. Requires "Allow grid export" below.
+  allow_grid_export:
+    name: Allow grid export
+    description: Opts out of the "never discharge into export" safety rule. Off by default, and separate from "Allow grid charging" — that one governs importing, this one exporting. Only enable if feeding the grid actually pays on your contract, and set a force-discharge trigger entity above.
   allow_grid_charge:
     name: Allow grid charging
     description: Opts out of the "never charge from the grid" safety rule. Off by default. Only turn this on if you are on a dynamic tariff where banking a cheap hour against an expensive one actually pays, and you have set a grid-charge trigger entity above.

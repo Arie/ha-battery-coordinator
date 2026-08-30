@@ -53,7 +53,11 @@ async def main() -> None:
     # allow_grid_charge is passed separately: brain_kwargs() is int-only
     # (it maps the numeric tunables), and widening it to int | bool just to
     # carry one flag makes every consumer handle a union it never wants.
-    brain = PermissionFSM(allow_grid_charge=config.allow_grid_charge, **config.brain_kwargs())
+    brain = PermissionFSM(
+        allow_grid_charge=config.allow_grid_charge,
+        allow_grid_export=config.allow_grid_export,
+        **config.brain_kwargs(),
+    )
 
     io = DeviceIO(config)
     mode = "LIVE" if not config.dry_run else "DRY RUN"
@@ -147,6 +151,7 @@ async def main() -> None:
                     "🔒D" if reading.inhibit_discharge else "",
                     "🔒C" if reading.inhibit_charge else "",
                     "⚡F" if reading.force_charge else "",
+                    "⚡D" if reading.force_discharge else "",
                 )
             )
             gate_s = f" [{gates}]" if gates else ""

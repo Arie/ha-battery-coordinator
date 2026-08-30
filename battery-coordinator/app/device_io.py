@@ -452,6 +452,9 @@ class DeviceIO:
         self.force_charge = OptionalHABinarySensor(
             config.ha_url, config.ha_token, config.force_charge_entity, config.read_timeout
         )
+        self.force_discharge = OptionalHABinarySensor(
+            config.ha_url, config.ha_token, config.force_discharge_entity, config.read_timeout
+        )
         if self.pib_powers and self.pib_socs and len(self.pib_powers) != len(self.pib_socs):
             # Config.validate() catches this and refuses to start; if we're
             # here something bypassed validation. Log an error so it's at
@@ -486,6 +489,7 @@ class DeviceIO:
             inhibit_dis_t = tg.create_task(self.inhibit_discharge.read(session))
             inhibit_chg_t = tg.create_task(self.inhibit_charge.read(session))
             force_chg_t = tg.create_task(self.force_charge.read(session))
+            force_dis_t = tg.create_task(self.force_discharge.read(session))
         zen = zen_t.result()
         p1 = p1_t.result()
         solar = solar_t.result()
@@ -515,6 +519,7 @@ class DeviceIO:
             inhibit_discharge=inhibit_dis_t.result(),
             inhibit_charge=inhibit_chg_t.result(),
             force_charge=force_chg_t.result(),
+            force_discharge=force_dis_t.result(),
         )
 
         return reading, zen, p1
