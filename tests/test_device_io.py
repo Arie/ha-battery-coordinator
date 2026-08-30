@@ -589,3 +589,106 @@ class TestOptionalHABinarySensor:
         """The force_charge case: no confirmed 'on' means no grid import."""
         sensor, session = self._sensor([{"raise_on_get": ConnectionError("HA down")}])
         assert await sensor.read(session, now=0) is False
+
+
+class _CapturingSession:
+    """Captures what set_mode/read actually put on the wire."""
+
+    def __init__(self, status: int = 200, payload: dict[str, Any] | None = None):
+        self.calls: list[dict[str, Any]] = []
+        self._status = status
+        self._payload = payload or {}
+
+    def put(self, url, headers=None, json=None, timeout=None, ssl=None):
+        self.calls.append({"verb": "PUT", "url": url, "headers": headers or {}, "json": json or {}})
+        return _FakeResponse(status=self._status, payload=self._payload)
+
+    def get(self, url, headers=None, timeout=None, ssl=None):
+        self.calls.append({"verb": "GET", "url": url, "headers": headers or {}, "json": None})
+        return _FakeResponse(status=self._status, payload=self._payload)
+
+    @property
+    def last(self) -> dict[str, Any]:
+        return self.calls[-1]
+
+
+class TestPIBApiV2Migration:
+    """HomeWizard deprecated `standby` and `to_full` in the v2 battery API.
+
+    Permissions are the documented replacement and "will be the only option
+    in the future". The brain keeps its own vocabulary — "standby" is a
+    semantic state there, not a wire format — so the translation belongs at
+    the I/O boundary, in one place.
+    """
+
+    def _meter(self):
+        return HWP1Meter("1.2.3.4", "tok")
+
+    @pytest.mark.asyncio
+    async def test_standby_becomes_zero_with_empty_permissions(self):
+        """Legacy standby -> zero mode forbidden from both directions."""
+        m, s = self._meter(), _CapturingSession()
+        assert await m.set_mode(s, "standby") is True
+        assert s.last["json"]["mode"] == "zero"
+        assert s.last["json"]["permissions"] == []
+
+    @pytest.mark.asyncio
+    async def test_standby_wins_over_a_contradictory_permission(self):
+        """Standby means "don't participate"; a permission cannot sneak in.
+
+        The device auto-switches out of standby the moment a permission is
+        added, so sending both would silently produce a live battery.
+        """
+        m, s = self._meter(), _CapturingSession()
+        await m.set_mode(s, "standby", ["discharge_allowed"])
+        assert s.last["json"]["permissions"] == []
+
+    @pytest.mark.asyncio
+    async def test_to_full_becomes_the_charge_to_full_flag(self):
+        m, s = self._meter(), _CapturingSession()
+        await m.set_mode(s, "to_full", ["charge_allowed"])
+        assert s.last["json"]["mode"] == "zero"
+        assert s.last["json"]["charge_to_full"] is True
+        assert s.last["json"]["permissions"] == ["charge_allowed"]
+
+    @pytest.mark.asyncio
+    async def test_zero_passes_through_unchanged(self):
+        m, s = self._meter(), _CapturingSession()
+        await m.set_mode(s, "zero", ["discharge_allowed"])
+        assert s.last["json"]["mode"] == "zero"
+        assert s.last["json"]["permissions"] == ["discharge_allowed"]
+
+    @pytest.mark.asyncio
+    async def test_charge_to_full_is_always_explicit(self):
+        """charge_to_full is sticky on the device.
+
+        It persists until something sets it false, so omitting it on the way
+        out of GRID_CHARGE would leave the PIBs charging to 100% forever.
+        Every call must state it.
+        """
+        m = self._meter()
+        for mode, perms in (("zero", ["charge_allowed"]), ("standby", None), ("zero", None)):
+            s = _CapturingSession()
+            await m.set_mode(s, mode, perms)
+            assert "charge_to_full" in s.last["json"], f"{mode} omitted charge_to_full"
+            assert s.last["json"]["charge_to_full"] is False
+
+    @pytest.mark.asyncio
+    async def test_never_emits_a_deprecated_mode(self):
+        m = self._meter()
+        for mode in ("standby", "to_full", "zero"):
+            s = _CapturingSession()
+            await m.set_mode(s, mode, ["charge_allowed"] if mode != "standby" else None)
+            assert s.last["json"]["mode"] not in ("standby", "to_full")
+
+    @pytest.mark.asyncio
+    async def test_api_version_header_on_write(self):
+        m, s = self._meter(), _CapturingSession()
+        await m.set_mode(s, "zero", ["charge_allowed"])
+        assert s.last["headers"].get("X-Api-Version") == "2"
+
+    @pytest.mark.asyncio
+    async def test_api_version_header_on_read(self):
+        m, s = self._meter(), _CapturingSession(payload=_GOOD_BATTERIES)
+        await m.read(s)
+        assert all(c["headers"].get("X-Api-Version") == "2" for c in s.calls), s.calls

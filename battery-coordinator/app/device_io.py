@@ -188,7 +188,14 @@ class HWP1Meter:
         self._last_pib_count: int | None = None
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
+        # X-Api-Version pins the v2 contract. Without it the meter may answer
+        # from an older shape, and the newer fields this client relies on
+        # (charge_to_full) are not guaranteed to be honoured.
+        return {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+            "X-Api-Version": "2",
+        }
 
     async def _get_json(self, session: aiohttp.ClientSession, path: str) -> dict[str, Any] | None:
         """GET path and return parsed JSON, or None on any failure.
@@ -240,10 +247,41 @@ class HWP1Meter:
         )
 
     async def set_mode(self, session: aiohttp.ClientSession, mode: str, permissions: list[str] | None = None) -> bool:
-        """Set PIB mode and permissions."""
-        payload: dict[str, Any] = {"mode": mode}
-        if permissions is not None:
-            payload["permissions"] = permissions
+        """Set PIB mode and permissions, translating the brain's vocabulary.
+
+        HomeWizard deprecated the `standby` and `to_full` modes in the v2
+        battery API; permissions are the documented replacement and "will be
+        the only option in the future". The brain keeps saying "standby"
+        because that is a semantic state there, not a wire format — the
+        translation lives here so there is one place to change when the API
+        moves again.
+
+          standby  ->  mode=zero, permissions=[]        (forbidden both ways)
+          to_full  ->  mode=zero, charge_to_full=true
+        """
+        payload: dict[str, Any] = {}
+        charge_to_full = False
+
+        if mode == "standby":
+            payload["mode"] = "zero"
+            # Standby means "do not participate". A permission alongside it is
+            # contradictory, and the device auto-switches out of standby the
+            # moment one is added — so drop whatever was passed rather than
+            # silently producing a live battery.
+            payload["permissions"] = []
+        elif mode == "to_full":
+            payload["mode"] = "zero"
+            payload["permissions"] = permissions if permissions is not None else ["charge_allowed"]
+            charge_to_full = True
+        else:
+            payload["mode"] = mode
+            if permissions is not None:
+                payload["permissions"] = permissions
+
+        # Always explicit: charge_to_full persists on the device until something
+        # sets it false. Omitting it when leaving GRID_CHARGE would leave the
+        # PIBs charging to 100% indefinitely.
+        payload["charge_to_full"] = charge_to_full
         try:
             async with session.put(
                 f"{self._url}/api/batteries",
