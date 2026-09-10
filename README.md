@@ -107,8 +107,9 @@ Rather than build a price model into a 1 Hz control loop, the add-on takes three
 | `inhibit_charge_entity` | Batteries stop charging |
 | `force_charge_entity` | Batteries charge from the grid at full rate (needs `allow_grid_charge`) |
 | `force_discharge_entity` | Zendure discharges at full rate, exporting the surplus (needs `allow_grid_export`) |
+| `setpoint_entity` | Zendure follows a wattage from an external optimiser (needs both opt-ins, see below) |
 
-All three default to empty, which is exactly the previous behaviour. Gates are evaluated before the state machine, so they override any state — including `DISCHARGE`, which has no "stop covering load" transition of its own. A gate that is on shows in the log line as `[🔒D]`, `[🔒C]`, or `[⚡F]`.
+All default to empty, which is exactly the previous behaviour. Gates are evaluated before the state machine, so they override any state — including `DISCHARGE`, which has no "stop covering load" transition of its own. A gate that is on shows in the log line as `[🔒D]`, `[🔒C]`, `[⚡F]`, `[⚡D]`, or `[🎯+1500]` for a setpoint.
 
 If Home Assistant becomes unreachable, a gate holds its last value for 60 seconds and then reverts to off. A grid charge never starts on a reading the add-on could not confirm.
 
@@ -146,7 +147,7 @@ template:
 Two different trades hide behind "grid charging", and they do not have the same answer:
 
 - **Import cheap, self-consume at the peak.** Gain is the price spread minus round-trip losses (~10–15%). Net metering is irrelevant here — nothing is exported — so this works both before and after the scheme ends.
-- **Import cheap, export later.** Under net metering the exported kWh nets at the same rate, so there is nothing to win.
+- **Import cheap, export later.** Under net metering the exported kWh is credited at the full retail price for that hour — commodity plus the tax and VAT the netting refunds — so this pays the same as self-consumption. It gets *worse* after net metering ends, when export is credited at roughly the market price with no tax refund.
 
 The gate above targets the first. Work out your own numbers before enabling it. `inhibit_charge_entity` always wins over `force_charge_entity`, so a stop request can never be overridden by a stuck automation.
 
@@ -164,7 +165,46 @@ The gate above targets the first. Work out your own numbers before enabling it. 
 
 For the duration the PIBs are held to `discharge_allowed` only. Granting them `charge_allowed` would let them read the negative P1 the Zendure is creating as solar-like surplus and charge from the export — the batteries funding each other in a circle while the meter runs.
 
-Whether this pays depends entirely on your contract. Under net metering an exported kWh nets at retail, so there is little to win; it becomes interesting once that ends.
+Whether this pays depends on your contract, and the intuition is easy to get backwards. On a dynamic tariff **under net metering**, an exported kWh is credited at the full retail price for that hour — the hourly commodity rate plus the tax and VAT the netting refunds. Selling into a €0.38 evening peak earns €0.38, the same as avoiding an import at that price. Exporting is therefore worth *more* while net metering lasts, not less; once it ends, export is credited at roughly the market rate with no tax refund and possibly minus feed-in costs.
+
+Two things to check against your own contract before relying on it:
+
+- Net metering only nets export against import **up to your annual import volume**. Export beyond that is paid at the supplier's much lower redelivery rate.
+- Many suppliers now levy feed-in costs (*terugleverkosten*), fixed or per-kWh, which come straight off this margin.
+
+Note also that under net metering, exporting and self-consuming a stored kWh are worth the same. Forced export only adds value when the battery would otherwise sit idle — full pack, low household load, high price.
+
+### Following an optimiser's setpoint
+
+The four gates are on/off. An optimiser such as [Day Ahead Optimizer](https://github.com/corneel27/day-ahead) produces something richer: a wattage per interval, planned against day-ahead prices, solar forecast and household baseload. `setpoint_entity` is a gate with a magnitude. Point it at a numeric entity in watts — DAO's `entity set power feedin` helper is exactly this — and the add-on follows it:
+
+| Setpoint | Zendure | PIBs |
+|---|---|---|
+| positive | charges at that wattage | `charge_allowed` only |
+| negative | discharges at that wattage | `discharge_allowed` only |
+| 0 | standby | zero mode, both permissions |
+| unavailable / non-numeric | normal behaviour | normal behaviour |
+
+The optimiser owns *how much*; the add-on owns *how*. Only the Zendure takes a watt setpoint, so it follows the number exactly up to its 2400 W limits. The plug-in batteries cannot, so they get the one permission that stops them fighting it: while the Zendure imports they may not discharge (they would read the import as load and feed the Zendure), and while it exports they may not charge (they would read the export as surplus and charge from it). At 0 they are free to zero-track the house on their own, which is what they are good at.
+
+Precedence, from the top: `inhibit_*` beats the setpoint outright (while a stop request is up the add-on behaves as if no optimiser were speaking), the manual `force_*` toggles beat it (an explicit human toggle beats an optimiser), and it beats the state machine. Values are clamped to `zen_max_charge_w` / `zen_max_discharge_w`, anything below 50 W is a hold, and the SOC floor and ceiling still apply — a stuck negative setpoint stops at `zen_soc_min`.
+
+It needs **both** `allow_grid_charge` and `allow_grid_export`, and the add-on refuses to start with the entity set and either missing: an optimiser buys and sells by nature, and half a job would be silent. With a setpoint entity configured the force entities become optional.
+
+Absence is the fail-safe, and it is also the hand-over switch. Do not point the add-on straight at the optimiser's helper; put a template sensor in between that shows the value only while you want the optimiser in charge:
+
+```yaml
+template:
+  - sensor:
+      - name: Battery setpoint
+        unit_of_measurement: W
+        state: >
+          {% if is_state('input_boolean.dao_battery_control', 'on') %}
+            {{ states('input_number.dao_battery_setpoint') }}
+          {% else %}unavailable{% endif %}
+```
+
+Switch the boolean off and the add-on drops back to plain zero-on-the-meter within a second. The same sensor is where a liveness check belongs — return `unavailable` when the optimiser has not written for a couple of hours — so a dead optimiser cannot leave the fleet parked on its last instruction.
 
 ### Never feeding back
 
