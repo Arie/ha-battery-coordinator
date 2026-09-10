@@ -203,6 +203,8 @@ class PermissionFSM:
         # The PIB permissions SETPOINT last emitted, so a sign change
         # re-issues them and an unchanged sign stays quiet.
         self._setpoint_perms: list[str] | None = None
+        # One-shot: the next _should_send must go out regardless of deltas.
+        self._force_send: bool = False
 
         # Per-instance overrides for the tunables. None = use class default.
         if step_holdoff_s is not None:
@@ -443,6 +445,7 @@ class PermissionFSM:
             # hold-off and the DISCHARGE->CHARGE flip, both of which exist to
             # stop exactly the export this state is for.
             State.FORCE_DISCHARGE: [],
+            State.SETPOINT: [],
             State.PIB_DISCHARGE: [
                 # Solar returns → charge
                 (
@@ -660,7 +663,11 @@ class PermissionFSM:
         if self.state == State.GRID_CHARGE:
             self.state = State.SLEEP
             self._init_step_for_new_state()
-            return "standby", None, False
+            # If a stop request is what ended it, the target=0 must reach
+            # the device this tick: the SLEEP carve-outs in _should_send
+            # would otherwise read "Zen charging while P1 exports" as a
+            # startup grace and leave it running against the gate.
+            return "standby", None, r.inhibit_charge
 
         # Force discharge is checked after grid charge, so force_charge wins
         # if both are somehow asserted — charging is the safer resolution of a
@@ -679,7 +686,7 @@ class PermissionFSM:
         if self.state == State.FORCE_DISCHARGE:
             self.state = State.SLEEP
             self._init_step_for_new_state()
-            return "standby", None, False
+            return "standby", None, r.inhibit_discharge
 
         # The setpoint ranks below the manual force gates (an explicit
         # human toggle beats an optimiser) and below the inhibit gates
@@ -693,6 +700,12 @@ class PermissionFSM:
                     self.state = State.SETPOINT
                     self._init_step_for_new_state()
                 self._setpoint_perms = perms
+                # The PIB permissions go out this tick; the Zendure target
+                # must too, or the two disagree for up to a heartbeat. The
+                # restart case makes this concrete: Zen still charging from
+                # before, optimiser now says 0, PIBs just got both
+                # permissions — without a sent hold they discharge into it.
+                self._force_send = True
                 return "zero", perms, False
             return None, None, False
 
@@ -700,7 +713,7 @@ class PermissionFSM:
             self.state = State.SLEEP
             self._setpoint_perms = None
             self._init_step_for_new_state()
-            return "standby", None, False
+            return "standby", None, (r.inhibit_charge or r.inhibit_discharge)
 
         if self._is_inhibited(self.state, r):
             self.state = State.SLEEP
@@ -913,6 +926,9 @@ class PermissionFSM:
         # the EV-charging case inhibit_discharge exists to stop. Without
         # this bypass the gate would flip the state and change nothing.
         if inhibited:
+            return target, True, True
+        if self._force_send:
+            self._force_send = False
             return target, True, True
 
         # Don't kill a Zendure that's already charging from genuine surplus.

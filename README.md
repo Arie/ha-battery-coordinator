@@ -99,7 +99,7 @@ Both rules hold whether or not a solar sensor is configured — the brain uses P
 
 The brain has no price model. It balances the meter, which is the right goal on a fixed tariff and the wrong one on a dynamic contract: an EV charging through a cheap hour looks like any other load, so the batteries empty themselves into it and have nothing left for the expensive evening peak.
 
-Rather than build a price model into a 1 Hz control loop, the add-on takes three optional on/off entities and lets Home Assistant decide. Any entity works — `input_boolean`, `binary_sensor`, or a template sensor comparing your price sensor to a threshold.
+Rather than build a price model into a 1 Hz control loop, the add-on takes a few optional entities and lets Home Assistant decide. Any entity works — `input_boolean`, `binary_sensor`, or a template sensor comparing your price sensor to a threshold.
 
 | Option | While it is on |
 |--------|----------------|
@@ -204,7 +204,7 @@ template:
           {% else %}unavailable{% endif %}
 ```
 
-Switch the boolean off and the add-on drops back to plain zero-on-the-meter within a second. The same sensor is where a liveness check belongs — return `unavailable` when the optimiser has not written for a couple of hours — so a dead optimiser cannot leave the fleet parked on its last instruction.
+Switch the boolean off and the add-on parks the fleet within a second, then resumes plain zero-on-the-meter after its normal wake hold-offs (10 s for charging, 30 s for discharging). The same sensor is where a liveness check belongs — return `unavailable` when the optimiser has not written for a couple of hours — so a dead optimiser cannot leave the fleet parked on its last instruction.
 
 ### Never feeding back
 

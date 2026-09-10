@@ -221,3 +221,46 @@ class TestSetpointClosedLoop:
         samples = _closed_loop(brain, load_w=300, ticks=1500, setpoint=-2400, zen_soc=12, soc_per_kwh=100)
         assert min(zen for _, zen, _ in samples) < -2000  # it did discharge first
         assert abs(samples[-1][1]) < 5  # and stopped at the floor
+
+
+class TestStopRequestsReachTheDevice:
+    """A stop must be sent on the tick it is decided, even when the
+    reading looks like one the _should_send carve-outs exist for."""
+
+    def test_inhibit_while_setpoint_charging_from_surplus_is_sent(self):
+        brain = _brain()
+        _run(brain, _r(p1=-1200, zen_power=1500, setpoint=1500), ticks=10)
+        d = brain.decide(_r(p1=-1200, zen_power=1500, setpoint=1500, inhibit_charge=True), t=10)
+        assert brain.state == State.SLEEP
+        assert d.target == 0 and d.send is True and d.inhibited is True
+
+    def test_inhibit_while_grid_charging_is_sent(self):
+        brain = _brain()
+        _run(brain, _r(p1=-1200, zen_power=2400, force_charge=True), ticks=10)
+        assert brain.state == State.GRID_CHARGE
+        d = brain.decide(_r(p1=-1200, zen_power=2400, force_charge=True, inhibit_charge=True), t=10)
+        assert brain.state == State.SLEEP
+        assert d.target == 0 and d.send is True and d.inhibited is True
+
+    def test_inhibit_while_force_discharging_is_sent(self):
+        brain = _brain()
+        _run(brain, _r(p1=800, zen_power=-2400, force_discharge=True), ticks=10)
+        assert brain.state == State.FORCE_DISCHARGE
+        d = brain.decide(_r(p1=800, zen_power=-2400, force_discharge=True, inhibit_discharge=True), t=10)
+        assert brain.state == State.SLEEP
+        assert d.target == 0 and d.send is True and d.inhibited is True
+
+    def test_entering_setpoint_hold_with_a_running_zendure_sends_immediately(self):
+        """Restart at a 0 setpoint while the Zendure is still charging: the
+        hold must go out on the entry tick, or the PIBs (now permitted both
+        ways) discharge into the Zendure's import."""
+        brain = _brain()
+        d = brain.decide(_r(p1=1500, zen_power=1500, setpoint=0), t=0)
+        assert brain.state == State.SETPOINT
+        assert d.target == 0 and d.send is True
+
+    def test_entering_setpoint_reversal_sends_immediately(self):
+        brain = _brain()
+        d = brain.decide(_r(p1=1500, zen_power=1500, setpoint=-1000), t=0)
+        assert brain.state == State.SETPOINT
+        assert d.target == -1000 and d.send is True

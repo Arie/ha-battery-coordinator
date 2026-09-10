@@ -6,6 +6,7 @@ Optional HA connection for solar sensor only.
 
 import asyncio
 import logging
+import math
 import ssl
 import time
 from dataclasses import dataclass
@@ -467,6 +468,8 @@ class OptionalHANumber:
                     v = data.get("state")
                     try:
                         value = float(v)
+                        if not math.isfinite(value):
+                            raise ValueError(v)
                     except (TypeError, ValueError):
                         # unavailable / unknown / a non-numeric template
                         # result: the optimiser has nothing to say. That is

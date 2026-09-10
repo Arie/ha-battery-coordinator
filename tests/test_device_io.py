@@ -750,3 +750,16 @@ class TestOptionalHANumber:
         assert await num.read(session, now=0.0) == 800.0
         assert await num.read(session, now=30.0) == 800.0
         assert await num.read(session, now=120.0) is None
+
+    @pytest.mark.asyncio
+    async def test_non_finite_states_read_none(self):
+        num = self._num()
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "nan"}},
+                {"status": 200, "payload": {"state": "inf"}},
+                {"status": 200, "payload": {"state": "-inf"}},
+            ]
+        )
+        for now in (0.0, 1.0, 2.0):
+            assert await num.read(session, now=now) is None
