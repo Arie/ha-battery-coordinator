@@ -41,6 +41,7 @@ class State(Enum):
     CHARGE = "CHARGE"
     GRID_CHARGE = "GRID_CHARGE"
     FORCE_DISCHARGE = "FORCE_DISCHARGE"
+    SETPOINT = "SETPOINT"
     DISCHARGE = "DISCHARGE"
     DISCHARGE_HELP = "DISCHARGE_HELP"
     PIB_DISCHARGE = "PIB_DISCHARGE"
@@ -70,6 +71,8 @@ class PermissionFSM:
       CHARGE         – PIBs zero (charge-only), Zendure at fixed step or NOM
       GRID_CHARGE    – deliberate grid import (opt-in), PIBs to_full
       FORCE_DISCHARGE– deliberate max discharge into export (opt-in)
+      SETPOINT       – Zendure follows an external wattage (opt-in), PIBs
+                       permissioned by its sign so they cannot fight it
       DISCHARGE      – Zendure NOM-tracks P1 solo, PIBs standby
       DISCHARGE_HELP – Zendure maxed, PIBs helping (discharge-only)
       PIB_DISCHARGE  – Zendure off, PIBs discharge alone
@@ -195,6 +198,11 @@ class PermissionFSM:
         self.zen_soc_min = zen_soc_min
         self.allow_grid_charge = allow_grid_charge
         self.allow_grid_export = allow_grid_export
+        # The wattage SETPOINT is currently following, already clamped.
+        self._setpoint_w: int = 0
+        # The PIB permissions SETPOINT last emitted, so a sign change
+        # re-issues them and an unchanged sign stays quiet.
+        self._setpoint_perms: list[str] | None = None
 
         # Per-instance overrides for the tunables. None = use class default.
         if step_holdoff_s is not None:
@@ -586,6 +594,47 @@ class PermissionFSM:
             return False
         return r.zen_soc > self.zen_soc_min
 
+    def _setpoint_for(self, r: Reading) -> int | None:
+        """The external setpoint, clamped, or None if the brain is on its own.
+
+        Both opt-ins are required: an optimiser buys and sells by nature,
+        so a setpoint with only one of them is a misconfiguration (config
+        validation refuses it) and is ignored here as belt and braces.
+        Either inhibit gate outranks the setpoint entirely: while a stop
+        request is up the brain behaves as if no optimiser were speaking,
+        so the existing inhibit handling applies to the whole fleet.
+        """
+        if r.setpoint is None:
+            return None
+        if not (self.allow_grid_charge and self.allow_grid_export):
+            return None
+        if r.inhibit_charge or r.inhibit_discharge:
+            return None
+        sp = int(r.setpoint)
+        # Below the Zendure's pilot floor there is nothing it can do but
+        # idle, so treat it as a hold rather than sending an unreachable
+        # trickle.
+        if abs(sp) < PILOT_W:
+            return 0
+        return max(-self.max_discharge, min(self.max_charge, sp))
+
+    @staticmethod
+    def _setpoint_perms_for(sp: int) -> list[str]:
+        """PIB permissions that make a setpoint safe to execute.
+
+        Charging from the grid puts import on the meter; with
+        discharge_allowed the PIBs would read it as load and discharge into
+        the Zendure. Discharging beyond load puts export on the meter; with
+        charge_allowed the PIBs would read it as surplus and charge from
+        our own export. Withholding the opposite permission is the hardware
+        lock. At 0 the Zendure idles and the PIBs are free to zero-track.
+        """
+        if sp > 0:
+            return ["charge_allowed"]
+        if sp < 0:
+            return ["discharge_allowed"]
+        return ["charge_allowed", "discharge_allowed"]
+
     def _apply_gates(self, r: Reading, t: float) -> tuple[str | None, list[str] | None, bool] | None:
         """Run the external gates ahead of the transition table.
 
@@ -629,6 +678,27 @@ class PermissionFSM:
 
         if self.state == State.FORCE_DISCHARGE:
             self.state = State.SLEEP
+            self._init_step_for_new_state()
+            return "standby", None, False
+
+        # The setpoint ranks below the manual force gates (an explicit
+        # human toggle beats an optimiser) and below the inhibit gates
+        # (folded into _setpoint_for), but above the transition table.
+        sp = self._setpoint_for(r)
+        if sp is not None:
+            perms = self._setpoint_perms_for(sp)
+            self._setpoint_w = sp
+            if self.state != State.SETPOINT or perms != self._setpoint_perms:
+                if self.state != State.SETPOINT:
+                    self.state = State.SETPOINT
+                    self._init_step_for_new_state()
+                self._setpoint_perms = perms
+                return "zero", perms, False
+            return None, None, False
+
+        if self.state == State.SETPOINT:
+            self.state = State.SLEEP
+            self._setpoint_perms = None
             self._init_step_for_new_state()
             return "standby", None, False
 
@@ -704,6 +774,11 @@ class PermissionFSM:
             # No NOM, no stepping: importing is the point, so P1 carries no
             # signal worth tracking. Flat max rate, SOC-clamped downstream.
             return self.max_charge
+
+        if self.state == State.SETPOINT:
+            # The optimiser already decided against P1; follow it flat.
+            # SOC-clamped downstream like the other gate-owned states.
+            return self._setpoint_w
 
         if self.state == State.CHARGE:
             pib_charge_cap = _total_charge_cap(r)
@@ -899,7 +974,7 @@ class PermissionFSM:
         # wake it from deep sleep every 30s.
         # `last_sent_target is not None` keeps startup quiet: brain has no
         # prior state to re-assert.
-        zen_idle = self.state in (State.SLEEP, State.PIB_DISCHARGE) and target == 0
+        zen_idle = self.state in (State.SLEEP, State.PIB_DISCHARGE, State.SETPOINT) and target == 0
         heartbeat_s = self.ZEN_IDLE_HEARTBEAT_S if zen_idle else self.ZEN_HEARTBEAT_S
         heartbeat = elapsed >= heartbeat_s and self.last_sent_target is not None
         send = heartbeat or change >= 50

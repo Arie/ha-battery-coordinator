@@ -89,6 +89,7 @@ class Config:
         self.inhibit_charge_entity = ""
         self.force_charge_entity = ""
         self.force_discharge_entity = ""
+        self.setpoint_entity = ""
         self.allow_grid_charge = False
         self.allow_grid_export = False
         self.pib_soc_entities: list[str] = []
@@ -122,6 +123,7 @@ class Config:
         self.inhibit_charge_entity = o.get("inhibit_charge_entity", "") or ""
         self.force_charge_entity = o.get("force_charge_entity", "") or ""
         self.force_discharge_entity = o.get("force_discharge_entity", "") or ""
+        self.setpoint_entity = o.get("setpoint_entity", "") or ""
         self.allow_grid_charge = bool(o.get("allow_grid_charge", False))
         self.allow_grid_export = bool(o.get("allow_grid_export", False))
         needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities or self._gate_entities())
@@ -160,6 +162,7 @@ class Config:
         self.inhibit_charge_entity = os.getenv("INHIBIT_CHARGE_ENTITY", "")
         self.force_charge_entity = os.getenv("FORCE_CHARGE_ENTITY", "")
         self.force_discharge_entity = os.getenv("FORCE_DISCHARGE_ENTITY", "")
+        self.setpoint_entity = os.getenv("SETPOINT_ENTITY", "")
         self.allow_grid_charge = os.getenv("ALLOW_GRID_CHARGE", "").lower() in ("1", "true", "yes")
         self.allow_grid_export = os.getenv("ALLOW_GRID_EXPORT", "").lower() in ("1", "true", "yes")
         # Comma-separated env vars in standalone mode, e.g.
@@ -209,13 +212,22 @@ class Config:
         # can ever assert the signal. Flag it rather than silently doing
         # nothing, since the user explicitly opted out of a safety rule and
         # will otherwise assume it took effect.
-        if self.allow_grid_export and not self.force_discharge_entity:
+        # A setpoint entity is the other thing that can trigger both, so
+        # it satisfies either opt-in on its own.
+        if self.allow_grid_export and not (self.force_discharge_entity or self.setpoint_entity):
             errors.append(
                 "allow_grid_export is enabled but force_discharge_entity is empty — nothing can trigger an export"
             )
-        if self.allow_grid_charge and not self.force_charge_entity:
+        if self.allow_grid_charge and not (self.force_charge_entity or self.setpoint_entity):
             errors.append(
                 "allow_grid_charge is enabled but force_charge_entity is empty — nothing can trigger a grid charge"
+            )
+        # An optimiser buys and sells by nature, so a setpoint with only
+        # one opt-in would silently do half a job. Refuse rather than guess.
+        if self.setpoint_entity and not (self.allow_grid_charge and self.allow_grid_export):
+            errors.append(
+                "setpoint_entity is set but allow_grid_charge and allow_grid_export must both be enabled — "
+                "an optimiser's setpoint imports and exports"
             )
         if self.ha_url and not self.ha_token:
             errors.append("ha_token is required when ha_url is set")
@@ -265,6 +277,7 @@ class Config:
                 self.inhibit_charge_entity,
                 self.force_charge_entity,
                 self.force_discharge_entity,
+                self.setpoint_entity,
             )
             if e
         ]

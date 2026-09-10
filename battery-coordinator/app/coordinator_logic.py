@@ -20,11 +20,15 @@ class Reading:
     one entry per configured PIB. The brain iterates them uniformly so
     1, 2, 3, or 4 PIBs all "just work".
 
-    The three gate booleans carry external policy into an otherwise
+    The four gate booleans carry external policy into an otherwise
     purely P1-driven brain. The brain has no price model; on a dynamic
     tariff "zero the meter" stops being the right objective (a cheap
     hour spent covering an EV load is stored energy sold at the wrong
     price). Home Assistant decides, these flags tell the brain.
+
+    `setpoint` is the same idea with a magnitude: a wattage an external
+    optimiser wants the Zendure to run at (+charge / -discharge / 0 hold).
+    None means no optimiser is speaking and the brain is on its own.
     """
 
     __slots__ = (
@@ -35,6 +39,7 @@ class Reading:
         "p1",
         "pib_socs",
         "pibs",
+        "setpoint",
         "solar",
         "zen_power",
         "zen_soc",
@@ -53,6 +58,7 @@ class Reading:
         inhibit_charge: bool = False,
         force_charge: bool = False,
         force_discharge: bool = False,
+        setpoint: float | None = None,
     ):
         self.p1 = p1
         self.pibs = list(pibs)
@@ -64,6 +70,7 @@ class Reading:
         self.inhibit_charge = inhibit_charge
         self.force_charge = force_charge
         self.force_discharge = force_discharge
+        self.setpoint = setpoint
 
         if len(self.pibs) != len(self.pib_socs):
             raise ValueError(
@@ -80,7 +87,8 @@ class Reading:
             f"Reading(p1={self.p1}, pibs={self.pibs}, pib_socs={self.pib_socs}, "
             f"zen_power={self.zen_power}, zen_soc={self.zen_soc}, solar={self.solar}, "
             f"inhibit_discharge={self.inhibit_discharge}, inhibit_charge={self.inhibit_charge}, "
-            f"force_charge={self.force_charge}, force_discharge={self.force_discharge})"
+            f"force_charge={self.force_charge}, force_discharge={self.force_discharge}, "
+            f"setpoint={self.setpoint})"
         )
 
 

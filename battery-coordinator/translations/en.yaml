@@ -24,6 +24,9 @@ configuration:
   force_discharge_entity:
     name: Force-discharge trigger entity (optional)
     description: Any HA on/off entity. While it is on the batteries discharge at full rate regardless of household demand, feeding any surplus to the grid. Only the Zendure can export (max 2400W); the plug-in batteries have no power setpoint and will only ever cover real load. Requires "Allow grid export" below.
+  setpoint_entity:
+    name: Optimiser setpoint entity (optional)
+    description: A numeric HA entity in watts written by an external optimiser such as Day Ahead Optimizer. Positive = charge, negative = discharge, 0 = hold. The Zendure follows it exactly (up to its 2400W limits); the plug-in batteries only get the permission that cannot fight it, and zero-track freely at 0. Unavailable or non-numeric means no setpoint and the add-on behaves as if the option were empty. Requires BOTH "Allow grid charging" and "Allow grid export".
   allow_grid_export:
     name: Allow grid export
     description: Opts out of the "never discharge into export" safety rule. Off by default, and separate from "Allow grid charging" — that one governs importing, this one exporting. Only enable if feeding the grid actually pays on your contract, and set a force-discharge trigger entity above.

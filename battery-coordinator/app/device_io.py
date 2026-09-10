@@ -426,6 +426,69 @@ class OptionalHABinarySensor:
         return False
 
 
+class OptionalHANumber:
+    """Read a numeric HA entity where absence must stay distinct from 0.
+
+    The external setpoint reader. OptionalHASensor's 0-on-failure default
+    is the right fail-safe for a SOC or a solar reading, but for a
+    setpoint 0 is a real instruction ("hold"). None is the fail-safe here:
+    it means "no optimiser is speaking" and the brain falls back to its
+    own P1-driven behaviour, exactly as before the feature existed.
+
+    Same staleness contract as the gates: a blip holds the last value for
+    `max_stale_s`, then the reading falls to None.
+    """
+
+    def __init__(self, ha_url: str, ha_token: str, entity_id: str, timeout: float = 3, max_stale_s: float = 60):
+        self._url = f"{ha_url}/api/states/{entity_id}" if ha_url and entity_id else ""
+        self._entity_id = entity_id
+        self._token = ha_token
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._last_value: float | None = None
+        self._last_value_t: float | None = None
+        self._max_stale_s = max_stale_s
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._url)
+
+    async def read(self, session: aiohttp.ClientSession, now: float | None = None) -> float | None:
+        if not self._url:
+            return None
+        if now is None:
+            now = time.monotonic()
+        try:
+            headers = {"Authorization": f"Bearer {self._token}"}
+            async with session.get(self._url, headers=headers, timeout=self._timeout) as r:
+                if r.status != 200:
+                    log.warning("HA number %s: HTTP %s", self._entity_id, r.status)
+                else:
+                    data = await r.json()
+                    v = data.get("state")
+                    try:
+                        value = float(v)
+                    except (TypeError, ValueError):
+                        # unavailable / unknown / a non-numeric template
+                        # result: the optimiser has nothing to say. That is
+                        # a deliberate "absent", not a transient failure, so
+                        # it must not be papered over by the stale cache.
+                        self._last_value = None
+                        self._last_value_t = None
+                        return None
+                    self._last_value = value
+                    self._last_value_t = now
+                    return value
+        except Exception:
+            pass
+        if self._last_value_t is not None and (now - self._last_value_t) <= self._max_stale_s:
+            return self._last_value
+        if self._last_value_t is not None:
+            log.warning("HA number %s stale > %ss; treating as absent", self._entity_id, self._max_stale_s)
+            self._last_value_t = None
+            self._last_value = None
+        return None
+
+
 class DeviceIO:
     """Unified device I/O layer. Reads all devices, produces a Reading."""
 
@@ -455,6 +518,8 @@ class DeviceIO:
         self.force_discharge = OptionalHABinarySensor(
             config.ha_url, config.ha_token, config.force_discharge_entity, config.read_timeout
         )
+        # External optimiser setpoint (W). None when nothing is speaking.
+        self.setpoint = OptionalHANumber(config.ha_url, config.ha_token, config.setpoint_entity, config.read_timeout)
         if self.pib_powers and self.pib_socs and len(self.pib_powers) != len(self.pib_socs):
             # Config.validate() catches this and refuses to start; if we're
             # here something bypassed validation. Log an error so it's at
@@ -490,6 +555,7 @@ class DeviceIO:
             inhibit_chg_t = tg.create_task(self.inhibit_charge.read(session))
             force_chg_t = tg.create_task(self.force_charge.read(session))
             force_dis_t = tg.create_task(self.force_discharge.read(session))
+            setpoint_t = tg.create_task(self.setpoint.read(session))
         zen = zen_t.result()
         p1 = p1_t.result()
         solar = solar_t.result()
@@ -520,6 +586,7 @@ class DeviceIO:
             inhibit_charge=inhibit_chg_t.result(),
             force_charge=force_chg_t.result(),
             force_discharge=force_dis_t.result(),
+            setpoint=setpoint_t.result(),
         )
 
         return reading, zen, p1

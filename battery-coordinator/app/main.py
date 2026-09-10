@@ -107,7 +107,10 @@ async def main() -> None:
                     brain.mark_sent(d.target, t)
                     sent = f" SENT discharge {abs(d.target)}W" + (" (mode switch)" if mode_switch else "")
                 elif d.target == 0:
-                    if brain.state in (State.SLEEP, State.PIB_DISCHARGE):
+                    # SETPOINT at 0 is the optimiser saying "hold": the
+                    # Zendure may sit there for hours, so park it in flash
+                    # standby like SLEEP rather than a RAM hold-zero.
+                    if brain.state in (State.SLEEP, State.PIB_DISCHARGE, State.SETPOINT):
                         ok = await io.zendure.standby(session)
                         sent = " SENT standby"
                     else:
@@ -152,6 +155,7 @@ async def main() -> None:
                     "🔒C" if reading.inhibit_charge else "",
                     "⚡F" if reading.force_charge else "",
                     "⚡D" if reading.force_discharge else "",
+                    f"🎯{reading.setpoint:+.0f}" if reading.setpoint is not None else "",
                 )
             )
             gate_s = f" [{gates}]" if gates else ""

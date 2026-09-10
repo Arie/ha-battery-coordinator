@@ -21,6 +21,7 @@ def clean_env(monkeypatch):
         "HA_URL",
         "HA_TOKEN",
         "SOLAR_ENTITY",
+        "SETPOINT_ENTITY",
         "ZEN_MAX_CHARGE_W",
         "ZEN_MAX_DISCHARGE_W",
         "ZEN_SOC_MIN",
@@ -542,3 +543,59 @@ class TestTariffGateOptions:
         c._load_from_env()
         assert c.force_discharge_entity == "input_boolean.dump"
         assert c.allow_grid_export is True
+
+
+class TestSetpointEntity:
+    """An external optimiser's wattage entity: needs both grid opt-ins."""
+
+    def _write_options(self, tmp_path, options):
+        p = tmp_path / "options.json"
+        p.write_text(json.dumps(options))
+        return str(p)
+
+    def _base(self, **extra):
+        return {"zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z", **extra}
+
+    def test_setpoint_entity_loads_from_options(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        c = Config(
+            options_path=self._write_options(
+                tmp_path,
+                self._base(setpoint_entity="sensor.battery_setpoint", allow_grid_charge=True, allow_grid_export=True),
+            )
+        )
+        assert c.setpoint_entity == "sensor.battery_setpoint"
+        assert c.ha_url  # it is an HA-backed entity like the gates
+        assert c.validate() == []
+
+    def test_setpoint_entity_alone_satisfies_both_opt_ins(self, clean_env, monkeypatch, tmp_path):
+        """No force entities needed: the setpoint is what triggers import and export."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        c = Config(
+            options_path=self._write_options(
+                tmp_path,
+                self._base(setpoint_entity="sensor.sp", allow_grid_charge=True, allow_grid_export=True),
+            )
+        )
+        assert c.force_charge_entity == "" and c.force_discharge_entity == ""
+        assert c.validate() == []
+
+    def test_setpoint_entity_requires_both_opt_ins(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        for flags in ({}, {"allow_grid_charge": True}, {"allow_grid_export": True}):
+            c = Config(options_path=self._write_options(tmp_path, self._base(setpoint_entity="sensor.sp", **flags)))
+            errs = [e for e in c.validate() if "setpoint_entity" in e]
+            assert errs, flags
+
+    def test_setpoint_entity_from_env(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        monkeypatch.setenv("HA_URL", "http://ha")
+        monkeypatch.setenv("HA_TOKEN", "t")
+        monkeypatch.setenv("SETPOINT_ENTITY", "input_number.sp")
+        monkeypatch.setenv("ALLOW_GRID_CHARGE", "true")
+        monkeypatch.setenv("ALLOW_GRID_EXPORT", "true")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        assert c.setpoint_entity == "input_number.sp"
+        assert c.validate() == []

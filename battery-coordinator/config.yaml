@@ -1,5 +1,5 @@
 name: Battery Coordinator
-version: "1.4.0"
+version: "1.5.0"
 slug: battery-coordinator
 description: Coordinates a Zendure 2400 AC battery with HomeWizard Plug-in Batteries against a HomeWizard P1 meter — prevents oscillation, cross-charging, and grid bleed.
 url: "https://github.com/Arie/ha-battery-coordinator"
@@ -41,6 +41,13 @@ options:
   #   force_discharge_entity:   on → discharge at max, exporting the surplus.
   #     Requires allow_grid_export below; ignored otherwise.
   force_discharge_entity: ""
+  #   setpoint_entity: a numeric entity (W) written by an external
+  #     optimiser such as Day Ahead Optimizer. +W = charge, -W = discharge,
+  #     0 = hold. The Zendure follows it; the plug-in batteries are
+  #     permissioned so they cannot fight it. Unavailable/non-numeric =
+  #     no setpoint, normal behaviour. Requires BOTH allow_grid_charge and
+  #     allow_grid_export.
+  setpoint_entity: ""
 
   # Opt out of the "never charge from the grid" hard rule. Off by default.
   # Only meaningful on a dynamic tariff where a cheap hour is worth banking
@@ -97,6 +104,7 @@ schema:
   inhibit_charge_entity: "str?"
   force_charge_entity: "str?"
   force_discharge_entity: "str?"
+  setpoint_entity: "str?"
   allow_grid_charge: bool
   allow_grid_export: bool
 

@@ -692,3 +692,61 @@ class TestPIBApiV2Migration:
         m, s = self._meter(), _CapturingSession(payload=_GOOD_BATTERIES)
         await m.read(s)
         assert all(c["headers"].get("X-Api-Version") == "2" for c in s.calls), s.calls
+
+
+class TestOptionalHANumber:
+    """A numeric HA entity where "no value" must stay distinct from 0.
+
+    The setpoint reader: 0 is a real instruction (hold), so absence has to
+    be None, not a zero default like OptionalHASensor returns.
+    """
+
+    def _num(self, entity="sensor.sp", **kw):
+        from device_io import OptionalHANumber
+
+        return OptionalHANumber("http://ha:8123", "tok", entity, **kw)
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_reads_none(self):
+        num = self._num(entity="")
+        assert await num.read(_FakeStateSession([]), now=0.0) is None
+
+    @pytest.mark.asyncio
+    async def test_numeric_state_reads_as_float(self):
+        num = self._num()
+        session = _FakeStateSession([{"status": 200, "payload": {"state": "-1500.0"}}])
+        assert await num.read(session, now=0.0) == -1500.0
+
+    @pytest.mark.asyncio
+    async def test_zero_is_a_value_not_absence(self):
+        num = self._num()
+        session = _FakeStateSession([{"status": 200, "payload": {"state": "0"}}])
+        assert await num.read(session, now=0.0) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_unavailable_and_junk_read_none(self):
+        num = self._num()
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "unavailable"}},
+                {"status": 200, "payload": {"state": "unknown"}},
+                {"status": 200, "payload": {"state": "off"}},
+            ]
+        )
+        assert await num.read(session, now=0.0) is None
+        assert await num.read(session, now=1.0) is None
+        assert await num.read(session, now=2.0) is None
+
+    @pytest.mark.asyncio
+    async def test_holds_last_value_briefly_then_falls_to_none(self):
+        num = self._num(max_stale_s=60)
+        session = _FakeStateSession(
+            [
+                {"status": 200, "payload": {"state": "800"}},
+                {"raise_on_get": ConnectionError("blip")},
+                {"raise_on_get": ConnectionError("HA down")},
+            ]
+        )
+        assert await num.read(session, now=0.0) == 800.0
+        assert await num.read(session, now=30.0) == 800.0
+        assert await num.read(session, now=120.0) is None
