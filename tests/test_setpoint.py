@@ -60,13 +60,24 @@ class TestSetpointDirection:
         assert ds[-1].target == -2000
         assert _perms(ds) == [("zero", ["discharge_allowed"])]
 
-    def test_zero_setpoint_holds_zendure_and_pibs(self):
-        """0 is "hold": the PIBs keep their SOC instead of zero-tracking."""
+    def test_zero_setpoint_holds_zendure_while_pibs_cover_load(self):
+        """0 holds the Zendure only: the optimiser does not model the PIBs,
+        so they keep covering the house, but never charge."""
         brain = _brain()
         ds = _run(brain, _r(p1=600, setpoint=0), ticks=10)
         assert brain.state == State.SETPOINT
         assert ds[-1].target == 0
+        assert _perms(ds) == [("zero", ["discharge_allowed"])]
+
+    def test_zero_setpoint_waits_for_the_zendure_to_stop_before_pibs_discharge(self):
+        """Charge -> hold: until the Zendure has ramped down, discharging PIBs
+        would read its grid import as load and feed it."""
+        brain = _brain()
+        _run(brain, _r(p1=1500, zen_power=1500, setpoint=1500), ticks=5)
+        ds = _run(brain, _r(p1=1500, zen_power=1500, setpoint=0), ticks=3, t0=5)
         assert _perms(ds) == [("standby", None)]
+        ds = _run(brain, _r(p1=400, zen_power=0, setpoint=0), ticks=3, t0=8)
+        assert _perms(ds) == [("zero", ["discharge_allowed"])]
 
     def test_full_rate_charge_setpoint_sends_pibs_to_full(self):
         """DAO asking the Zendure's full rate means "charge now": PIBs join in."""
@@ -97,7 +108,7 @@ class TestSetpointLimits:
         brain = _brain()
         ds = _run(brain, _r(setpoint=30), ticks=3)
         assert ds[-1].target == 0
-        assert _perms(ds) == [("standby", None)]
+        assert _perms(ds) == [("zero", ["discharge_allowed"])]
 
     def test_positive_setpoint_at_soc_ceiling_idles_zendure(self):
         brain = _brain(zen_soc_max=100)
@@ -226,14 +237,17 @@ class TestSetpointClosedLoop:
             samples = _closed_loop(brain, load_w=300, ticks=120, setpoint=sp)
             assert all(p1 >= -5 for p1, _, _ in samples), sp
 
-    def test_zero_setpoint_holds_the_pibs_too(self):
-        """A hold means the whole fleet keeps its SOC; the house imports."""
+    def test_zero_setpoint_pibs_cover_a_deficit(self):
         brain = _brain()
-        for load in (600, -900):  # deficit and surplus
-            samples = _closed_loop(brain, load_w=load, ticks=120, setpoint=0)
-            p1, zen, pib = samples[-1]
-            assert abs(zen) < 1 and abs(pib) < 1, load
-            assert abs(p1 - load) < 1, load
+        p1, zen, pib = _closed_loop(brain, load_w=600, ticks=120, setpoint=0)[-1]
+        assert abs(zen) < 1
+        assert abs(p1) < 5 and pib < -590
+
+    def test_zero_setpoint_pibs_do_not_soak_a_surplus(self):
+        brain = _brain()
+        p1, zen, pib = _closed_loop(brain, load_w=-900, ticks=120, setpoint=0)[-1]
+        assert abs(zen) < 1 and abs(pib) < 1
+        assert abs(p1 + 900) < 1
 
     def test_stuck_negative_setpoint_stops_at_the_soc_floor(self):
         brain = _brain(zen_soc_min=10)

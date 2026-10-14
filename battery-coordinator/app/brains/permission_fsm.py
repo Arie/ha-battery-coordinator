@@ -621,12 +621,16 @@ class PermissionFSM:
             return 0
         return max(-self.max_discharge, min(self.max_charge, sp))
 
-    def _setpoint_pib_for(self, sp: int) -> tuple[str, list[str] | None]:
+    def _setpoint_pib_for(self, sp: int, zen_power: float) -> tuple[str, list[str] | None]:
         """PIB (mode, permissions) that follow a setpoint as closely as they can.
 
         The PIBs have no watt setpoint, so they approximate the optimiser's
         intent per direction:
-          0                 -> standby: a hold is a hold for the whole fleet.
+          0                 -> zero, discharge only: the optimiser plans the
+                               Zendure alone, so its hold is the Zendure's.
+                               The PIBs keep covering the house but never
+                               charge. Held in standby until the Zendure has
+                               actually stopped.
           full-rate charge  -> to_full: the optimiser wants energy in now.
           partial charge    -> zero, charge only: soak surplus, never fight.
           discharge         -> zero, discharge only: cover load, never fight.
@@ -639,7 +643,7 @@ class PermissionFSM:
             return "to_full", ["charge_allowed"]
         if sp > 0:
             return "zero", ["charge_allowed"]
-        if sp < 0:
+        if sp < 0 or abs(zen_power) < PILOT_W:
             return "zero", ["discharge_allowed"]
         return "standby", None
 
@@ -698,7 +702,7 @@ class PermissionFSM:
         # (folded into _setpoint_for), but above the transition table.
         sp = self._setpoint_for(r)
         if sp is not None:
-            pib = self._setpoint_pib_for(sp)
+            pib = self._setpoint_pib_for(sp, r.zen_power)
             self._setpoint_w = sp
             if self.state != State.SETPOINT or pib != self._setpoint_pib:
                 if self.state != State.SETPOINT:

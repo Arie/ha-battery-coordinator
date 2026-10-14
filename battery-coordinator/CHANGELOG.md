@@ -1,3 +1,7 @@
+## 1.6.1
+
+- **At a 0 setpoint the plug-in batteries cover the house again, but still never charge.** 1.6.0 put them in `standby`, treating the optimiser's hold as a hold for the whole fleet. It is not: DAO plans the Zendure alone, so its 0 means "keep the Zendure's SOC for later" and says nothing about the PIBs. In practice that left full PIBs idle through an expensive evening while the house imported. They now get zero mode with `discharge_allowed` only. Until the Zendure has actually stopped (below the 50W pilot floor) they stay in `standby`, because on a charge -> hold change they would otherwise read its ramping-down import as load and feed it; the band change is re-issued as soon as it settles.
+
 ## 1.6.0
 
 - **The plug-in batteries now follow the setpoint's intent, not just its sign.** Under 1.5.0 a 0 setpoint idled the Zendure but left the PIBs zero-tracking with both permissions, so they kept charging and discharging while the optimiser had asked the fleet to hold. Each setpoint band now maps to the closest PIB behaviour: 0 -> `standby` (the whole fleet holds its SOC), full-rate charge (at or above `zen_max_charge_w`) -> `to_full` (the optimiser wants energy in now, so the PIBs charge too), partial charge -> zero mode with `charge_allowed` only (soak surplus, never fight), discharge -> zero mode with `discharge_allowed` only (unchanged). The cross-charge lock is intact in every band. A band change re-issues the PIB command once; staying in a band stays quiet.
