@@ -60,12 +60,31 @@ class TestSetpointDirection:
         assert ds[-1].target == -2000
         assert _perms(ds) == [("zero", ["discharge_allowed"])]
 
-    def test_zero_setpoint_idles_zendure_and_lets_pibs_zero_track(self):
+    def test_zero_setpoint_holds_zendure_and_pibs(self):
+        """0 is "hold": the PIBs keep their SOC instead of zero-tracking."""
         brain = _brain()
         ds = _run(brain, _r(p1=600, setpoint=0), ticks=10)
         assert brain.state == State.SETPOINT
         assert ds[-1].target == 0
-        assert _perms(ds) == [("zero", ["charge_allowed", "discharge_allowed"])]
+        assert _perms(ds) == [("standby", None)]
+
+    def test_full_rate_charge_setpoint_sends_pibs_to_full(self):
+        """DAO asking the Zendure's full rate means "charge now": PIBs join in."""
+        brain = _brain(max_charge_w=2400)
+        ds = _run(brain, _r(p1=800, setpoint=2400), ticks=10)
+        assert ds[-1].target == 2400
+        assert _perms(ds) == [("to_full", ["charge_allowed"])]
+
+    def test_setpoint_above_max_counts_as_full_rate(self):
+        brain = _brain(max_charge_w=2400)
+        ds = _run(brain, _r(p1=800, setpoint=4000), ticks=5)
+        assert _perms(ds) == [("to_full", ["charge_allowed"])]
+
+    def test_full_rate_to_partial_charge_drops_pibs_back_to_surplus_only(self):
+        brain = _brain(max_charge_w=2400)
+        ds = _run(brain, _r(setpoint=2400), ticks=5)
+        ds += _run(brain, _r(setpoint=1200), ticks=5, t0=5)
+        assert _perms(ds) == [("to_full", ["charge_allowed"]), ("zero", ["charge_allowed"])]
 
 
 class TestSetpointLimits:
@@ -78,7 +97,7 @@ class TestSetpointLimits:
         brain = _brain()
         ds = _run(brain, _r(setpoint=30), ticks=3)
         assert ds[-1].target == 0
-        assert _perms(ds) == [("zero", ["charge_allowed", "discharge_allowed"])]
+        assert _perms(ds) == [("standby", None)]
 
     def test_positive_setpoint_at_soc_ceiling_idles_zendure(self):
         brain = _brain(zen_soc_max=100)
@@ -207,13 +226,14 @@ class TestSetpointClosedLoop:
             samples = _closed_loop(brain, load_w=300, ticks=120, setpoint=sp)
             assert all(p1 >= -5 for p1, _, _ in samples), sp
 
-    def test_zero_setpoint_lets_pibs_cover_the_load(self):
+    def test_zero_setpoint_holds_the_pibs_too(self):
+        """A hold means the whole fleet keeps its SOC; the house imports."""
         brain = _brain()
-        samples = _closed_loop(brain, load_w=600, ticks=120, setpoint=0)
-        p1, zen, pib = samples[-1]
-        assert abs(zen) < 1
-        assert pib < -500
-        assert abs(p1) < 50
+        for load in (600, -900):  # deficit and surplus
+            samples = _closed_loop(brain, load_w=load, ticks=120, setpoint=0)
+            p1, zen, pib = samples[-1]
+            assert abs(zen) < 1 and abs(pib) < 1, load
+            assert abs(p1 - load) < 1, load
 
     def test_stuck_negative_setpoint_stops_at_the_soc_floor(self):
         brain = _brain(zen_soc_min=10)

@@ -200,9 +200,9 @@ class PermissionFSM:
         self.allow_grid_export = allow_grid_export
         # The wattage SETPOINT is currently following, already clamped.
         self._setpoint_w: int = 0
-        # The PIB permissions SETPOINT last emitted, so a sign change
-        # re-issues them and an unchanged sign stays quiet.
-        self._setpoint_perms: list[str] | None = None
+        # The PIB (mode, permissions) SETPOINT last emitted, so a change of
+        # band re-issues them and an unchanged band stays quiet.
+        self._setpoint_pib: tuple[str, list[str] | None] | None = None
         # One-shot: the next _should_send must go out regardless of deltas.
         self._force_send: bool = False
 
@@ -621,22 +621,27 @@ class PermissionFSM:
             return 0
         return max(-self.max_discharge, min(self.max_charge, sp))
 
-    @staticmethod
-    def _setpoint_perms_for(sp: int) -> list[str]:
-        """PIB permissions that make a setpoint safe to execute.
+    def _setpoint_pib_for(self, sp: int) -> tuple[str, list[str] | None]:
+        """PIB (mode, permissions) that follow a setpoint as closely as they can.
 
-        Charging from the grid puts import on the meter; with
-        discharge_allowed the PIBs would read it as load and discharge into
-        the Zendure. Discharging beyond load puts export on the meter; with
-        charge_allowed the PIBs would read it as surplus and charge from
-        our own export. Withholding the opposite permission is the hardware
-        lock. At 0 the Zendure idles and the PIBs are free to zero-track.
+        The PIBs have no watt setpoint, so they approximate the optimiser's
+        intent per direction:
+          0                 -> standby: a hold is a hold for the whole fleet.
+          full-rate charge  -> to_full: the optimiser wants energy in now.
+          partial charge    -> zero, charge only: soak surplus, never fight.
+          discharge         -> zero, discharge only: cover load, never fight.
+        Withholding the opposite permission is the cross-charge lock: with
+        discharge_allowed the PIBs would read the Zendure's grid import as
+        load and feed it; with charge_allowed they would read its export as
+        surplus and charge from it.
         """
+        if sp >= self.max_charge:
+            return "to_full", ["charge_allowed"]
         if sp > 0:
-            return ["charge_allowed"]
+            return "zero", ["charge_allowed"]
         if sp < 0:
-            return ["discharge_allowed"]
-        return ["charge_allowed", "discharge_allowed"]
+            return "zero", ["discharge_allowed"]
+        return "standby", None
 
     def _apply_gates(self, r: Reading, t: float) -> tuple[str | None, list[str] | None, bool] | None:
         """Run the external gates ahead of the transition table.
@@ -693,25 +698,25 @@ class PermissionFSM:
         # (folded into _setpoint_for), but above the transition table.
         sp = self._setpoint_for(r)
         if sp is not None:
-            perms = self._setpoint_perms_for(sp)
+            pib = self._setpoint_pib_for(sp)
             self._setpoint_w = sp
-            if self.state != State.SETPOINT or perms != self._setpoint_perms:
+            if self.state != State.SETPOINT or pib != self._setpoint_pib:
                 if self.state != State.SETPOINT:
                     self.state = State.SETPOINT
                     self._init_step_for_new_state()
-                self._setpoint_perms = perms
+                self._setpoint_pib = pib
                 # The PIB permissions go out this tick; the Zendure target
                 # must too, or the two disagree for up to a heartbeat. The
                 # restart case makes this concrete: Zen still charging from
                 # before, optimiser now says 0, PIBs just got both
                 # permissions — without a sent hold they discharge into it.
                 self._force_send = True
-                return "zero", perms, False
+                return pib[0], pib[1], False
             return None, None, False
 
         if self.state == State.SETPOINT:
             self.state = State.SLEEP
-            self._setpoint_perms = None
+            self._setpoint_pib = None
             self._init_step_for_new_state()
             return "standby", None, (r.inhibit_charge or r.inhibit_discharge)
 

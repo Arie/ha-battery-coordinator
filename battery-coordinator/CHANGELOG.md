@@ -1,3 +1,8 @@
+## 1.6.0
+
+- **The plug-in batteries now follow the setpoint's intent, not just its sign.** Under 1.5.0 a 0 setpoint idled the Zendure but left the PIBs zero-tracking with both permissions, so they kept charging and discharging while the optimiser had asked the fleet to hold. Each setpoint band now maps to the closest PIB behaviour: 0 -> `standby` (the whole fleet holds its SOC), full-rate charge (at or above `zen_max_charge_w`) -> `to_full` (the optimiser wants energy in now, so the PIBs charge too), partial charge -> zero mode with `charge_allowed` only (soak surplus, never fight), discharge -> zero mode with `discharge_allowed` only (unchanged). The cross-charge lock is intact in every band. A band change re-issues the PIB command once; staying in a band stays quiet.
+- Trade-off to know about: at a 0 setpoint the PIBs no longer soak solar surplus, so on a sunny day an optimiser that plans "hold" exports what they would have stored. Hand control back (setpoint unavailable) when you would rather zero-track.
+
 ## 1.5.0
 
 - Add `setpoint_entity`: a numeric HA entity in watts written by an external optimiser (built for [Day Ahead Optimizer](https://github.com/corneel27/day-ahead), whose `entity set power feedin` is exactly this). The four tariff gates are on/off; a setpoint is a gate with a magnitude. Positive = charge, negative = discharge, 0 = hold. A new gate-owned `SETPOINT` state follows it flat, like `GRID_CHARGE` and `FORCE_DISCHARGE` do at full rate — the optimiser already decided against its own price and load model, so P1 carries no signal worth tracking.

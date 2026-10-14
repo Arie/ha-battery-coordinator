@@ -180,12 +180,13 @@ The four gates are on/off. An optimiser such as [Day Ahead Optimizer](https://gi
 
 | Setpoint | Zendure | PIBs |
 |---|---|---|
-| positive | charges at that wattage | `charge_allowed` only |
+| full rate (≥ `zen_max_charge_w`) | charges at full rate | `to_full`, charging at their own rate |
+| positive, below full rate | charges at that wattage | `charge_allowed` only, soaking surplus |
 | negative | discharges at that wattage | `discharge_allowed` only |
-| 0 | standby | zero mode, both permissions |
+| 0 | standby | standby, holding SOC |
 | unavailable / non-numeric | normal behaviour | normal behaviour |
 
-The optimiser owns *how much*; the add-on owns *how*. Only the Zendure takes a watt setpoint, so it follows the number exactly up to its 2400 W limits. The plug-in batteries cannot, so they get the one permission that stops them fighting it: while the Zendure imports they may not discharge (they would read the import as load and feed the Zendure), and while it exports they may not charge (they would read the export as surplus and charge from it). At 0 they are free to zero-track the house on their own, which is what they are good at.
+The optimiser owns *how much*; the add-on owns *how*. Only the Zendure takes a watt setpoint, so it follows the number exactly up to its 2400 W limits. The plug-in batteries cannot, so they get the one permission that stops them fighting it: while the Zendure imports they may not discharge (they would read the import as load and feed the Zendure), and while it exports they may not charge (they would read the export as surplus and charge from it). At 0 the whole fleet holds its SOC, and when the optimiser asks for the Zendure's full charge rate the PIBs charge to full alongside it.
 
 Precedence, from the top: `inhibit_*` beats the setpoint outright (while a stop request is up the add-on behaves as if no optimiser were speaking), the manual `force_*` toggles beat it (an explicit human toggle beats an optimiser), and it beats the state machine. Values are clamped to `zen_max_charge_w` / `zen_max_discharge_w`, anything below 50 W is a hold, and the SOC floor and ceiling still apply — a stuck negative setpoint stops at `zen_soc_min`.
 
