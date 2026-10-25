@@ -102,6 +102,7 @@ the Zendure creates as surplus and charge off our own output.
 - **PIB permission failures retry next tick.** A failed `set_mode` PUT calls `brain.mark_pib_send_failed()`, which rewinds the heartbeat timer so the next tick re-emits — not after 5 min.
 - **Startup detection has a 2s holdoff.** A single noisy first reading can't lock the brain into a wrong state.
 - **p1_contradicts requires 3s sustained.** Brief P1 spikes during charge/discharge no longer accelerate step-down.
+- **Solar limit fails open: startup, gate off, stale gates and SIGTERM all restore 100%; only 0xF001 is written.**
 - **DISCHARGE stops rather than holding the pilot floor into an export.** `nom = zen_power - p1` equals `-(house load)` exactly — the `zen_power` term cancels the current setpoint — so it is safe to threshold on. When demand sits below `PILOT_W`, holding the -50W floor pushed the difference to the grid and parked P1 at ~-50W, inside the dead zone above the `DISCHARGE->CHARGE` guard (`p1 < -100W`). No transition could see it, so the brain stayed there indefinitely and bled the pack into the meter. `_discharge_held_off` latches the stop, with `EXPORT_HYST_W` (25W) of hysteresis so a load hovering at the boundary doesn't flip the target every tick. Pinned by `TestNeverFeedsBackToGrid`.
 
 ## Network
@@ -111,6 +112,7 @@ the Zendure creates as surplus and charge off our own output.
 | Zendure 2400 AC | `http://<zendure_ip>/properties/report` (read), `/properties/write` (write) |
 | HomeWizard P1 meter | `https://<p1_ip>/api/measurement` (grid), `/api/batteries` (PIB read/write) |
 | Home Assistant (optional) | `http://supervisor/core/api/states/<entity>` (solar + per-PIB SOC/power) |
+| SolarEdge inverter (optional) | Writes go through HA, `POST /api/services/number/set_value` on `solar_limit_entity` (0xF001 via `solaredge_modbus_multi`). Never Modbus: the inverter accepts one Modbus TCP client and HA's integration holds it |
 
 PIB SOC is not exposed by the P1 API — it must come from HA's HomeWizard integration.
 
@@ -136,6 +138,7 @@ battery-coordinator/
     config.py             Loads /data/options.json or env vars; validates
     device_io.py          Zendure local REST + HW P1 + OptionalHASensor
     coordinator_logic.py  Reading, Decision, PIB taper functions
+    curtailer.py          SolarCurtailer: the inverter limit (pure, no I/O)
     brains/
       permission_fsm.py   The brain (transition table, decide(), step logic)
 
@@ -145,6 +148,8 @@ pyproject.toml            uv project: pytest, ruff, dev deps
 tests/
   test_brain_overrides.py Tunable kwargs propagate
   test_config.py          Config loader / validator
+  test_curtailer.py       SolarCurtailer unit tests (gates, trim, throttle, heartbeat)
+  test_curtailment.py     Closed loop: soak first, no sustained export, bounded writes
   test_device_io.py       Stale-read caching, SN retry, OptionalHA staleness + HTTP status
   test_invariants.py      Property-based + scenario tests on the brain
   test_n_pibs.py          Brain handles 1/2/3/4 PIBs
@@ -232,3 +237,30 @@ Gate entities are read through `OptionalHABinarySensor`, which wraps the same
 retry/staleness contract as `OptionalHASensor` and fails closed to `False`
 after 60s — an unreachable HA reverts to pre-feature behaviour and can never
 start a grid charge.
+
+## Curtailment options
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| curtail_export_entity | "" | HA on/off entity; on → don't export (trim the inverter after the batteries soak) |
+| import_pays_entity | "" | HA on/off entity; on → inverter 0%, PIBs `to_full` charge-only |
+| solar_limit_entity | "" | HA `number` (0–100%) the add-on writes; alone it only restores 100% |
+| solar_rated_w | 6000 | Inverter rated AC power, to turn watts into percent |
+| curtail_target_w | -30W | P1 the trim aims at (slight export the PIBs soak) |
+| curtail_deadband_w | 30W | ± band around the target with no action |
+| curtail_step_pct | 1 | Smallest limit change written |
+| curtail_min_write_s | 3s | Minimum time between writes |
+| curtail_settle_down_s | 20s | Sustained export + saturation before trimming down (PIB ramp ~20s) |
+| curtail_settle_up_s | 5s | Sustained import before trimming up |
+
+The curtailer (`curtailer.py`) is a separate pure controller; `main.py` feeds
+it `brain.batteries_saturated(reading)` and performs the writes. Saturation =
+no battery can take more: the Zendure follows a setpoint, is maxed or at its
+SOC ceiling, or `inhibit_charge` is on; and the PIBs are all ≥ 99 %, charging
+at ≥ 90 % of their combined cap, or not permitted to charge. Trim-up happens
+only while the inverter is held back (output within `HELD_BACK_MARGIN_W` =
+150W of the cap), solar reads 0, or the import has lasted `UNHELD_IMPORT_S`
+(60s). While a gate is on the limit is re-asserted every `HEARTBEAT_S` (300s).
+In the brain, `inhibit_charge` blocks the import-pays PIB `to_full`, and
+without a setpoint the discharge states are blocked while either price gate is
+on.

@@ -32,7 +32,7 @@ configuration:
     description: Any HA on/off entity. While it is on (exporting earns nothing or costs money) the solar inverter is throttled so the grid stays near the curtail target. Fails open - if the entity is unavailable or Home Assistant is unreachable no curtailment happens and the limit is restored to 100%. Only the active power limit (0xF001) is written. Requires the solar limit entity and the solar entity.
   import_pays_entity:
     name: Import-pays trigger entity (optional)
-    description: Any HA on/off entity. While it is on (importing from the grid is paid) the solar inverter is throttled so the grid stays near the curtail target. Fails open - if the entity is unavailable or Home Assistant is unreachable no curtailment happens and the limit is restored to 100%. Only the active power limit (0xF001) is written. Requires the solar limit entity and the solar entity.
+    description: Any HA on/off entity. While it is on (importing from the grid is paid) the solar inverter is set to 0% and the plug-in batteries charge to full from the grid; the Zendure keeps following the optimiser setpoint. Fails open - if the entity is unavailable or Home Assistant is unreachable no curtailment happens and the limit is restored to 100%. Only the active power limit (0xF001) is written. Requires the solar limit entity and the solar entity.
   solar_limit_entity:
     name: Solar power-limit entity (optional)
     description: A numeric HA entity (percent, 0-100) that sets the inverter active power limit. This is the only thing the curtailer writes - only the active power limit (0xF001) is written. On its own, without a trigger entity, it only ever restores 100%. Unavailable states fail open to 100%.
@@ -53,10 +53,10 @@ configuration:
     description: Minimum seconds between writes of the solar power limit, to protect the inverter.
   curtail_settle_down_s:
     name: Curtail settle time when lowering (s)
-    description: Seconds to wait after lowering the limit before judging the result.
+    description: Seconds the export (with no battery able to take more) must last before the limit is lowered. The default covers the plug-in batteries' ~20 s ramp, so the trim never throttles what they are about to soak.
   curtail_settle_up_s:
     name: Curtail settle time when raising (s)
-    description: Seconds to wait after raising the limit before judging the result.
+    description: Seconds the import must last before the limit is raised.
   allow_grid_export:
     name: Allow grid export
     description: Opts out of the "never discharge into export" safety rule. Off by default, and separate from "Allow grid charging" — that one governs importing, this one exporting. Only enable if feeding the grid actually pays on your contract, and set a force-discharge trigger entity above.

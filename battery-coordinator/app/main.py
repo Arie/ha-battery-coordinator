@@ -13,6 +13,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import signal
 import sys
 import time
 from datetime import datetime
@@ -20,6 +21,7 @@ from datetime import datetime
 import aiohttp
 from brains.permission_fsm import PermissionFSM, State
 from config import Config
+from curtailer import SolarCurtailer
 from device_io import DeviceIO
 
 logging.basicConfig(
@@ -60,6 +62,9 @@ async def main() -> None:
     )
 
     io = DeviceIO(config)
+    # Solar curtailment is optional. With only solar_limit_entity set the
+    # curtailer never sees a gate, so it just restores 100% at startup.
+    curtailer = SolarCurtailer(**config.curtailer_kwargs()) if io.solar_limit.configured else None
     mode = "LIVE" if not config.dry_run else "DRY RUN"
     log.info(f"Battery Coordinator [{mode}]")
     if not config.dry_run:
@@ -67,137 +72,192 @@ async def main() -> None:
 
     HEARTBEAT_S = 60  # log a status line at INFO at least this often
 
+    # The Supervisor stops the add-on with SIGTERM. Turn it into a
+    # cancellation of this task so the finally below can restore the
+    # solar limit instead of the process dying mid-curtail. Only the first
+    # SIGTERM cancels: a repeat would cancel the restore itself.
+    main_task = asyncio.current_task()
+    if main_task is not None:
+        task = main_task
+
+        def _on_sigterm() -> None:
+            if not task.cancelling():
+                task.cancel()
+
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_sigterm)
+
     async with aiohttp.ClientSession() as session:
-        # Read initial Zendure SN. Retry — the device may take 1–2 min
-        # after a host reboot to populate it, and writes need the SN.
-        zen_sn = await io.zendure.fetch_sn(session)
-        log.info(f"Zendure SN: {zen_sn or '<not yet available>'}")
-        if not zen_sn and not config.dry_run:
-            # Writes will fail with an empty SN. read() keeps polling and
-            # caches the SN whenever it shows up, so writes self-heal once
-            # the device populates it.
-            log.warning("Zendure SN never appeared — writes will fail until it does")
+        try:
+            # Read initial Zendure SN. Retry — the device may take 1–2 min
+            # after a host reboot to populate it, and writes need the SN.
+            zen_sn = await io.zendure.fetch_sn(session)
+            log.info(f"Zendure SN: {zen_sn or '<not yet available>'}")
+            if not zen_sn and not config.dry_run:
+                # Writes will fail with an empty SN. read() keeps polling and
+                # caches the SN whenever it shows up, so writes self-heal once
+                # the device populates it.
+                log.warning("Zendure SN never appeared — writes will fail until it does")
 
-        prev_state = None
-        prev_gates = ""
-        prev_target: int | None = None
-        last_info_t = 0.0
+            prev_state = None
+            prev_gates = ""
+            prev_target: int | None = None
+            last_info_t = 0.0
 
-        while True:
-            t = time.monotonic()
-            now = datetime.now().strftime("%H:%M:%S")
+            while True:
+                t = time.monotonic()
+                now = datetime.now().strftime("%H:%M:%S")
 
-            # Read all devices
-            reading, zen, p1 = await io.read_all(session)
+                # Read all devices
+                reading, zen, p1 = await io.read_all(session)
 
-            # Brain decides
-            d = brain.decide(reading, t)
+                # Brain decides
+                d = brain.decide(reading, t)
 
-            # Send Zendure command
-            sent = ""
-            if not config.dry_run and d.send:
-                if d.target > 0:
-                    mode_switch = brain.last_ac_mode != PermissionFSM.AC_CHARGE
-                    ok = await io.zendure.charge(session, d.target, mode_switch)
-                    brain.mark_sent(d.target, t)
-                    sent = f" SENT charge {d.target}W" + (" (mode switch)" if mode_switch else "")
-                elif d.target < 0:
-                    mode_switch = brain.last_ac_mode != PermissionFSM.AC_DISCHARGE
-                    ok = await io.zendure.discharge(session, abs(d.target), mode_switch)
-                    brain.mark_sent(d.target, t)
-                    sent = f" SENT discharge {abs(d.target)}W" + (" (mode switch)" if mode_switch else "")
-                elif d.target == 0:
-                    # SETPOINT at 0 is the optimiser saying "hold": the
-                    # Zendure may sit there for hours, so park it in flash
-                    # standby like SLEEP rather than a RAM hold-zero.
-                    # ensure_standby skips the write when this tick's read
-                    # already shows flash standby, so the idle heartbeat
-                    # heals drift without a flash write per beat.
-                    if brain.state in (State.SLEEP, State.PIB_DISCHARGE, State.SETPOINT):
-                        ok, written = await io.zendure.ensure_standby(session)
-                        sent = " SENT standby" if written else ""
-                    else:
-                        ok = await io.zendure.hold_zero(session)
-                        sent = " SENT hold-zero"
-                    brain.mark_sent(0, t)
-                if sent and not ok:
-                    sent += " FAILED!"
+                # Send Zendure command
+                sent = ""
+                if not config.dry_run and d.send:
+                    if d.target > 0:
+                        mode_switch = brain.last_ac_mode != PermissionFSM.AC_CHARGE
+                        ok = await io.zendure.charge(session, d.target, mode_switch)
+                        brain.mark_sent(d.target, t)
+                        sent = f" SENT charge {d.target}W" + (" (mode switch)" if mode_switch else "")
+                    elif d.target < 0:
+                        mode_switch = brain.last_ac_mode != PermissionFSM.AC_DISCHARGE
+                        ok = await io.zendure.discharge(session, abs(d.target), mode_switch)
+                        brain.mark_sent(d.target, t)
+                        sent = f" SENT discharge {abs(d.target)}W" + (" (mode switch)" if mode_switch else "")
+                    elif d.target == 0:
+                        # SETPOINT at 0 is the optimiser saying "hold": the
+                        # Zendure may sit there for hours, so park it in flash
+                        # standby like SLEEP rather than a RAM hold-zero.
+                        # ensure_standby skips the write when this tick's read
+                        # already shows flash standby, so the idle heartbeat
+                        # heals drift without a flash write per beat.
+                        if brain.state in (State.SLEEP, State.PIB_DISCHARGE, State.SETPOINT):
+                            ok, written = await io.zendure.ensure_standby(session)
+                            sent = " SENT standby" if written else ""
+                        else:
+                            ok = await io.zendure.hold_zero(session)
+                            sent = " SENT hold-zero"
+                        brain.mark_sent(0, t)
+                    if sent and not ok:
+                        sent += " FAILED!"
 
-            # Send PIB command
-            pib_sent = ""
-            if not config.dry_run and (d.pib_mode or d.pib_permissions is not None):
-                pib_mode = d.pib_mode or "zero"
-                ok = await io.p1.set_mode(session, pib_mode, d.pib_permissions)
-                if not ok:
-                    # Don't wait 5 min for the heartbeat — re-emit next tick.
-                    # PIB permission PUTs are the cross-charge lock; a silent
-                    # failure means batteries can fight until the next
-                    # heartbeat lands.
-                    brain.mark_pib_send_failed()
-                perms = ""
-                if d.pib_permissions is not None:
-                    perms = "(" + ",".join(p.replace("_allowed", "") for p in d.pib_permissions) + ")"
-                pib_sent = f" PIB→{pib_mode}{perms}" + ("" if ok else " FAILED!")
+                # Send PIB command
+                pib_sent = ""
+                if not config.dry_run and (d.pib_mode or d.pib_permissions is not None):
+                    pib_mode = d.pib_mode or "zero"
+                    ok = await io.p1.set_mode(session, pib_mode, d.pib_permissions)
+                    if not ok:
+                        # Don't wait 5 min for the heartbeat — re-emit next tick.
+                        # PIB permission PUTs are the cross-charge lock; a silent
+                        # failure means batteries can fight until the next
+                        # heartbeat lands.
+                        brain.mark_pib_send_failed()
+                    perms = ""
+                    if d.pib_permissions is not None:
+                        perms = "(" + ",".join(p.replace("_allowed", "") for p in d.pib_permissions) + ")"
+                    pib_sent = f" PIB→{pib_mode}{perms}" + ("" if ok else " FAILED!")
 
-            # Per-PIB breakdown: "+800/+240W (84/97%)"
-            if reading.pibs:
-                pib_powers_s = "/".join(f"{p:>+5.0f}" for p in reading.pibs) + "W"
-                pib_socs_s = "/".join(f"{s:.0f}" for s in reading.pib_socs) + "%"
-                pib_str = f"🔌 {pib_powers_s} ({pib_socs_s})"
-            else:
-                pib_str = f"🔌 {p1.pib_power:>+5.0f}W ({p1.pib_count}x)"
+                # Solar limit. Decided after the brain so the saturation
+                # check sees this tick's PIB permissions.
+                if curtailer is not None:
+                    cd = curtailer.decide(
+                        p1=reading.p1,
+                        solar_w=reading.solar,
+                        curtail=reading.curtail_export,
+                        import_pays=reading.import_pays,
+                        saturated=brain.batteries_saturated(reading),
+                        t=t,
+                    )
+                    if cd.write is not None and not config.dry_run:
+                        old = curtailer.limit
+                        ok = await io.solar_limit.set_value(session, cd.write)
+                        if ok:
+                            curtailer.mark_written(cd.write, t)
+                        else:
+                            curtailer.mark_write_failed(t)
+                        old_s = "?" if old is None else str(old)
+                        log.info(f"SolarEdge limit {old_s}→{cd.write}% ({cd.reason})" + ("" if ok else " FAILED!"))
 
-            tgt_s = f"charge {d.target}W" if d.target > 0 else f"discharge {abs(d.target)}W" if d.target < 0 else "hold"
-            # Make a gated tick unmistakable in the log — a forced SLEEP
-            # otherwise looks identical to "nothing to do", which is the
-            # one reading a user debugging their price automation needs
-            # to tell apart.
-            gates = "".join(
-                (
-                    "🔒D" if reading.inhibit_discharge else "",
-                    "🔒C" if reading.inhibit_charge else "",
-                    "⚡F" if reading.force_charge else "",
-                    "⚡D" if reading.force_discharge else "",
-                    f"🎯{reading.setpoint:+.0f}" if reading.setpoint is not None else "",
+                # Per-PIB breakdown: "+800/+240W (84/97%)"
+                if reading.pibs:
+                    pib_powers_s = "/".join(f"{p:>+5.0f}" for p in reading.pibs) + "W"
+                    pib_socs_s = "/".join(f"{s:.0f}" for s in reading.pib_socs) + "%"
+                    pib_str = f"🔌 {pib_powers_s} ({pib_socs_s})"
+                else:
+                    pib_str = f"🔌 {p1.pib_power:>+5.0f}W ({p1.pib_count}x)"
+
+                tgt_s = (
+                    f"charge {d.target}W" if d.target > 0 else f"discharge {abs(d.target)}W" if d.target < 0 else "hold"
                 )
-            )
-            gate_s = f" [{gates}]" if gates else ""
-            diff = d.target - zen.power
+                # Make a gated tick unmistakable in the log — a forced SLEEP
+                # otherwise looks identical to "nothing to do", which is the
+                # one reading a user debugging their price automation needs
+                # to tell apart.
+                gates = "".join(
+                    (
+                        "🔒D" if reading.inhibit_discharge else "",
+                        "🔒C" if reading.inhibit_charge else "",
+                        "⚡F" if reading.force_charge else "",
+                        "⚡D" if reading.force_discharge else "",
+                        "🌞X" if reading.curtail_export else "",
+                        "💶I" if reading.import_pays else "",
+                        f"🎯{reading.setpoint:+.0f}" if reading.setpoint is not None else "",
+                    )
+                )
+                gate_s = f" [{gates}]" if gates else ""
+                limit = curtailer.limit if curtailer is not None else None
+                limit_s = f" ⛔{limit}%" if limit is not None and limit < 100 else ""
+                diff = d.target - zen.power
 
-            # State transition → its own INFO line for easy grep.
-            state_changed = d.zone != prev_state
-            if state_changed:
-                reason = ""
-                if d.zone == "PIB_DISCHARGE" and zen.soc > brain.zen_soc_min:
-                    reason = " (Zendure unresponsive — falling back to PIBs)"
-                log.info(f"State: {prev_state or '∅'} → {d.zone}{reason}")
-                prev_state = d.zone
+                # State transition → its own INFO line for easy grep.
+                state_changed = d.zone != prev_state
+                if state_changed:
+                    reason = ""
+                    if d.zone == "PIB_DISCHARGE" and zen.soc > brain.zen_soc_min:
+                        reason = " (Zendure unresponsive — falling back to PIBs)"
+                    log.info(f"State: {prev_state or '∅'} → {d.zone}{reason}")
+                    prev_state = d.zone
 
-            # Promote the per-tick line to INFO only when something interesting
-            # actually happened — a send, a state change, a target shift, or
-            # the 60s heartbeat. Quiet ticks stay at DEBUG.
-            target_changed = prev_target is None or abs(d.target - prev_target) >= 50
-            heartbeat_due = (t - last_info_t) >= HEARTBEAT_S
-            gates_changed = gates != prev_gates
-            prev_gates = gates
-            interesting = bool(sent or pib_sent or state_changed or target_changed or heartbeat_due or gates_changed)
-            line = (
-                f"{now}  P1:{reading.p1:>+6.0f}W  {pib_str}  "
-                f"☀️{reading.solar:>5.0f}W  🪫{zen.power:>+6.0f}W ({zen.soc:.0f}%)  "
-                f"[{d.zone}]{gate_s} → {tgt_s} ({diff:>+.0f}){sent}{pib_sent}"
-            )
-            if interesting:
-                log.info(line)
-                last_info_t = t
-            else:
-                log.debug(line)
-            prev_target = d.target
+                # Promote the per-tick line to INFO only when something interesting
+                # actually happened — a send, a state change, a target shift, or
+                # the 60s heartbeat. Quiet ticks stay at DEBUG.
+                target_changed = prev_target is None or abs(d.target - prev_target) >= 50
+                heartbeat_due = (t - last_info_t) >= HEARTBEAT_S
+                gates_changed = gates != prev_gates
+                prev_gates = gates
+                interesting = bool(
+                    sent or pib_sent or state_changed or target_changed or heartbeat_due or gates_changed
+                )
+                line = (
+                    f"{now}  P1:{reading.p1:>+6.0f}W  {pib_str}  "
+                    f"☀️{reading.solar:>5.0f}W{limit_s}  🪫{zen.power:>+6.0f}W ({zen.soc:.0f}%)  "
+                    f"[{d.zone}]{gate_s} → {tgt_s} ({diff:>+.0f}){sent}{pib_sent}"
+                )
+                if interesting:
+                    log.info(line)
+                    last_info_t = t
+                else:
+                    log.debug(line)
+                prev_target = d.target
 
-            await asyncio.sleep(1)
+                await asyncio.sleep(1)
+        finally:
+            # Best-effort fail-open on shutdown: never leave the inverter
+            # throttled behind a stopped add-on. limit None (unknown, a
+            # failed write) restores too. set_value carries the writer's
+            # own timeout, so a dead HA cannot hang the shutdown.
+            if curtailer is not None and curtailer.limit != 100 and not config.dry_run:
+                ok = await io.solar_limit.set_value(session, 100)
+                old_s = "?" if curtailer.limit is None else str(curtailer.limit)
+                log.info(f"SolarEdge limit {old_s}→100% (shutdown)" + ("" if ok else " FAILED!"))
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # CancelledError is the SIGTERM path: the handler cancels main(),
+        # whose finally has already restored the solar limit.
         log.info("Stopped.")

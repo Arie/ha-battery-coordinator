@@ -1,5 +1,5 @@
 name: Battery Coordinator
-version: "1.6.2"
+version: "1.7.0"
 slug: battery-coordinator
 description: Coordinates a Zendure 2400 AC battery with HomeWizard Plug-in Batteries against a HomeWizard P1 meter — prevents oscillation, cross-charging, and grid bleed.
 url: "https://github.com/Arie/ha-battery-coordinator"
@@ -55,7 +55,8 @@ options:
   # mean no curtailment, and the limit is restored to 100%.
   #   curtail_export_entity: on → exporting earns nothing/costs money, so
   #     curtail solar to hold the grid at curtail_target_w.
-  #   import_pays_entity:    on → importing is paid, so curtail solar.
+  #   import_pays_entity:    on → importing is paid, so solar to 0% and
+  #     the plug-in batteries charge to full from the grid.
   curtail_export_entity: ""
   import_pays_entity: ""
   solar_limit_entity: ""
