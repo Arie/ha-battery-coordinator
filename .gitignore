@@ -26,3 +26,4 @@ history.csv
 
 # Local design notes, not shipped
 docs/
+.superpowers/
