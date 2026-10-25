@@ -27,6 +27,36 @@ configuration:
   setpoint_entity:
     name: Optimiser setpoint entity (optional)
     description: A numeric HA entity in watts written by an external optimiser such as Day Ahead Optimizer. Positive = charge, negative = discharge, 0 = hold. The Zendure follows it exactly (up to its 2400W limits); the plug-in batteries only get the permission that cannot fight it, and zero-track freely at 0. Unavailable or non-numeric means no setpoint and the add-on behaves as if the option were empty. Requires BOTH "Allow grid charging" and "Allow grid export".
+  curtail_export_entity:
+    name: Curtail-on-export trigger entity (optional)
+    description: Any HA on/off entity. While it is on (exporting earns nothing or costs money) the solar inverter is throttled so the grid stays near the curtail target. Fails open - if the entity is unavailable or Home Assistant is unreachable no curtailment happens and the limit is restored to 100%. Only the active power limit (0xF001) is written. Requires the solar limit entity and the solar entity.
+  import_pays_entity:
+    name: Import-pays trigger entity (optional)
+    description: Any HA on/off entity. While it is on (importing from the grid is paid) the solar inverter is throttled so the grid stays near the curtail target. Fails open - if the entity is unavailable or Home Assistant is unreachable no curtailment happens and the limit is restored to 100%. Only the active power limit (0xF001) is written. Requires the solar limit entity and the solar entity.
+  solar_limit_entity:
+    name: Solar power-limit entity (optional)
+    description: A numeric HA entity (percent, 0-100) that sets the inverter active power limit. This is the only thing the curtailer writes - only the active power limit (0xF001) is written. On its own, without a trigger entity, it only ever restores 100%. Unavailable states fail open to 100%.
+  solar_rated_w:
+    name: Solar rated power (W)
+    description: Rated AC output of the inverter, used to convert the needed power reduction into a percentage limit.
+  curtail_target_w:
+    name: Curtail grid target (W)
+    description: Grid power the curtailer aims for while curtailing. Negative means a small export margin (default -30 W).
+  curtail_deadband_w:
+    name: Curtail deadband (W)
+    description: The grid may drift this far from the target before the limit is changed.
+  curtail_step_pct:
+    name: Curtail step (%)
+    description: Smallest limit change, in percent of rated power, that is written to the inverter.
+  curtail_min_write_s:
+    name: Curtail minimum write interval (s)
+    description: Minimum seconds between writes of the solar power limit, to protect the inverter.
+  curtail_settle_down_s:
+    name: Curtail settle time when lowering (s)
+    description: Seconds to wait after lowering the limit before judging the result.
+  curtail_settle_up_s:
+    name: Curtail settle time when raising (s)
+    description: Seconds to wait after raising the limit before judging the result.
   allow_grid_export:
     name: Allow grid export
     description: Opts out of the "never discharge into export" safety rule. Off by default, and separate from "Allow grid charging" — that one governs importing, this one exporting. Only enable if feeding the grid actually pays on your contract, and set a force-discharge trigger entity above.

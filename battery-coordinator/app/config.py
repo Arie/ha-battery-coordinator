@@ -90,6 +90,16 @@ class Config:
         self.force_charge_entity = ""
         self.force_discharge_entity = ""
         self.setpoint_entity = ""
+        self.curtail_export_entity = ""
+        self.import_pays_entity = ""
+        self.solar_limit_entity = ""
+        self.solar_rated_w = 6000
+        self.curtail_target_w = -30
+        self.curtail_deadband_w = 30
+        self.curtail_step_pct = 1
+        self.curtail_min_write_s = 3
+        self.curtail_settle_down_s = 20
+        self.curtail_settle_up_s = 5
         self.allow_grid_charge = False
         self.allow_grid_export = False
         self.pib_soc_entities: list[str] = []
@@ -124,6 +134,18 @@ class Config:
         self.force_charge_entity = o.get("force_charge_entity", "") or ""
         self.force_discharge_entity = o.get("force_discharge_entity", "") or ""
         self.setpoint_entity = o.get("setpoint_entity", "") or ""
+        self.curtail_export_entity = o.get("curtail_export_entity", "") or ""
+        self.import_pays_entity = o.get("import_pays_entity", "") or ""
+        self.solar_limit_entity = o.get("solar_limit_entity", "") or ""
+        self.solar_rated_w = _safe_int(o.get("solar_rated_w"), field="solar_rated_w", default=6000)
+        self.curtail_target_w = _safe_int(o.get("curtail_target_w"), field="curtail_target_w", default=-30)
+        self.curtail_deadband_w = _safe_int(o.get("curtail_deadband_w"), field="curtail_deadband_w", default=30)
+        self.curtail_step_pct = _safe_int(o.get("curtail_step_pct"), field="curtail_step_pct", default=1)
+        self.curtail_min_write_s = _safe_int(o.get("curtail_min_write_s"), field="curtail_min_write_s", default=3)
+        self.curtail_settle_down_s = _safe_int(
+            o.get("curtail_settle_down_s"), field="curtail_settle_down_s", default=20
+        )
+        self.curtail_settle_up_s = _safe_int(o.get("curtail_settle_up_s"), field="curtail_settle_up_s", default=5)
         self.allow_grid_charge = bool(o.get("allow_grid_charge", False))
         self.allow_grid_export = bool(o.get("allow_grid_export", False))
         needs_ha = bool(self.solar_entity or self.pib_soc_entities or self.pib_power_entities or self._gate_entities())
@@ -163,6 +185,18 @@ class Config:
         self.force_charge_entity = os.getenv("FORCE_CHARGE_ENTITY", "")
         self.force_discharge_entity = os.getenv("FORCE_DISCHARGE_ENTITY", "")
         self.setpoint_entity = os.getenv("SETPOINT_ENTITY", "")
+        self.curtail_export_entity = os.getenv("CURTAIL_EXPORT_ENTITY", "")
+        self.import_pays_entity = os.getenv("IMPORT_PAYS_ENTITY", "")
+        self.solar_limit_entity = os.getenv("SOLAR_LIMIT_ENTITY", "")
+        self.solar_rated_w = _safe_int(os.getenv("SOLAR_RATED_W"), field="SOLAR_RATED_W", default=6000)
+        self.curtail_target_w = _safe_int(os.getenv("CURTAIL_TARGET_W"), field="CURTAIL_TARGET_W", default=-30)
+        self.curtail_deadband_w = _safe_int(os.getenv("CURTAIL_DEADBAND_W"), field="CURTAIL_DEADBAND_W", default=30)
+        self.curtail_step_pct = _safe_int(os.getenv("CURTAIL_STEP_PCT"), field="CURTAIL_STEP_PCT", default=1)
+        self.curtail_min_write_s = _safe_int(os.getenv("CURTAIL_MIN_WRITE_S"), field="CURTAIL_MIN_WRITE_S", default=3)
+        self.curtail_settle_down_s = _safe_int(
+            os.getenv("CURTAIL_SETTLE_DOWN_S"), field="CURTAIL_SETTLE_DOWN_S", default=20
+        )
+        self.curtail_settle_up_s = _safe_int(os.getenv("CURTAIL_SETTLE_UP_S"), field="CURTAIL_SETTLE_UP_S", default=5)
         self.allow_grid_charge = os.getenv("ALLOW_GRID_CHARGE", "").lower() in ("1", "true", "yes")
         self.allow_grid_export = os.getenv("ALLOW_GRID_EXPORT", "").lower() in ("1", "true", "yes")
         # Comma-separated env vars in standalone mode, e.g.
@@ -229,6 +263,26 @@ class Config:
                 "setpoint_entity is set but allow_grid_charge and allow_grid_export must both be enabled — "
                 "an optimiser's setpoint imports and exports"
             )
+        # Curtailment gates need something to curtail (the limit entity) and
+        # something to measure (solar output). solar_limit_entity alone is
+        # valid: with no gate it only ever restores 100%.
+        if self.curtail_export_entity or self.import_pays_entity:
+            if not self.solar_limit_entity:
+                errors.append("solar_limit_entity is required when curtail_export_entity or import_pays_entity is set")
+            if not self.solar_entity:
+                errors.append("solar_entity is required when curtail_export_entity or import_pays_entity is set")
+        if self.solar_rated_w <= 0:
+            errors.append(f"solar_rated_w must be > 0 (got {self.solar_rated_w})")
+        if not (1 <= self.curtail_step_pct <= 100):
+            errors.append(f"curtail_step_pct must be 1–100 (got {self.curtail_step_pct})")
+        if self.curtail_min_write_s < 1:
+            errors.append(f"curtail_min_write_s must be >= 1 (got {self.curtail_min_write_s})")
+        if self.curtail_deadband_w < 0:
+            errors.append(f"curtail_deadband_w must be >= 0 (got {self.curtail_deadband_w})")
+        if self.curtail_settle_down_s < 0:
+            errors.append(f"curtail_settle_down_s must be >= 0 (got {self.curtail_settle_down_s})")
+        if self.curtail_settle_up_s < 0:
+            errors.append(f"curtail_settle_up_s must be >= 0 (got {self.curtail_settle_up_s})")
         if self.ha_url and not self.ha_token:
             errors.append("ha_token is required when ha_url is set")
         if self.zen_soc_min >= self.zen_soc_max:
@@ -278,6 +332,9 @@ class Config:
                 self.force_charge_entity,
                 self.force_discharge_entity,
                 self.setpoint_entity,
+                self.curtail_export_entity,
+                self.import_pays_entity,
+                self.solar_limit_entity,
             )
             if e
         ]
@@ -290,4 +347,16 @@ class Config:
             "zen_soc_max": self.zen_soc_max,
             "zen_soc_min": self.zen_soc_min,
             **self.brain,
+        }
+
+    def curtailer_kwargs(self) -> dict[str, int]:
+        """Kwargs for the solar curtailer."""
+        return {
+            "rated_w": self.solar_rated_w,
+            "target_w": self.curtail_target_w,
+            "deadband_w": self.curtail_deadband_w,
+            "step_pct": self.curtail_step_pct,
+            "min_write_s": self.curtail_min_write_s,
+            "settle_down_s": self.curtail_settle_down_s,
+            "settle_up_s": self.curtail_settle_up_s,
         }

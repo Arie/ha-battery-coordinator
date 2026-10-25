@@ -22,6 +22,16 @@ def clean_env(monkeypatch):
         "HA_TOKEN",
         "SOLAR_ENTITY",
         "SETPOINT_ENTITY",
+        "CURTAIL_EXPORT_ENTITY",
+        "IMPORT_PAYS_ENTITY",
+        "SOLAR_LIMIT_ENTITY",
+        "SOLAR_RATED_W",
+        "CURTAIL_TARGET_W",
+        "CURTAIL_DEADBAND_W",
+        "CURTAIL_STEP_PCT",
+        "CURTAIL_MIN_WRITE_S",
+        "CURTAIL_SETTLE_DOWN_S",
+        "CURTAIL_SETTLE_UP_S",
         "ZEN_MAX_CHARGE_W",
         "ZEN_MAX_DISCHARGE_W",
         "ZEN_SOC_MIN",
@@ -599,3 +609,98 @@ class TestSetpointEntity:
         c = Config(options_path=_missing_options_path(tmp_path))
         assert c.setpoint_entity == "input_number.sp"
         assert c.validate() == []
+
+
+class TestCurtailmentOptions:
+    """Solar curtailment: gate entities, limit entity, and tuning knobs."""
+
+    def _write_options(self, tmp_path, options):
+        p = tmp_path / "options.json"
+        p.write_text(json.dumps(options))
+        return str(p)
+
+    def _base(self, **extra):
+        return {"zendure_ip": "x", "hw_p1_ip": "y", "hw_p1_token": "z", **extra}
+
+    def _cfg(self, tmp_path, **extra):
+        return Config(options_path=self._write_options(tmp_path, self._base(**extra)))
+
+    def test_curtail_defaults(self, clean_env, tmp_path):
+        c = self._cfg(tmp_path)
+        assert (
+            c.solar_rated_w,
+            c.curtail_target_w,
+            c.curtail_deadband_w,
+            c.curtail_step_pct,
+            c.curtail_min_write_s,
+            c.curtail_settle_down_s,
+            c.curtail_settle_up_s,
+        ) == (6000, -30, 30, 1, 3, 20, 5)
+        assert c.curtail_export_entity == c.import_pays_entity == c.solar_limit_entity == ""
+
+    def test_gate_requires_limit_and_solar_entity(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        for gate in ("curtail_export_entity", "import_pays_entity"):
+            c = self._cfg(tmp_path, **{gate: "binary_sensor.g"})
+            assert any("solar_limit_entity" in e for e in c.validate()), gate
+            c = self._cfg(tmp_path, **{gate: "binary_sensor.g", "solar_limit_entity": "number.lim"})
+            assert any("solar_entity" in e for e in c.validate()), gate
+            c = self._cfg(
+                tmp_path,
+                **{gate: "binary_sensor.g", "solar_limit_entity": "number.lim", "solar_entity": "sensor.pv"},
+            )
+            assert c.validate() == [], gate
+
+    def test_limit_entity_alone_is_valid(self, clean_env, monkeypatch, tmp_path):
+        """Without a gate it only ever restores 100%."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        c = self._cfg(tmp_path, solar_limit_entity="number.lim")
+        assert c.validate() == []
+
+    def test_curtail_entities_use_ha_proxy(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        for key in ("curtail_export_entity", "import_pays_entity", "solar_limit_entity"):
+            c = self._cfg(tmp_path, **{key: "x.y"})
+            assert c.ha_url == "http://supervisor/core", key
+
+    def test_curtail_bounds(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("ZENDURE_IP", "x")
+        monkeypatch.setenv("HW_P1_IP", "y")
+        monkeypatch.setenv("HW_P1_TOKEN", "z")
+        for var, val in [
+            ("SOLAR_RATED_W", "0"),
+            ("CURTAIL_STEP_PCT", "0"),
+            ("CURTAIL_STEP_PCT", "101"),
+            ("CURTAIL_MIN_WRITE_S", "0"),
+            ("CURTAIL_DEADBAND_W", "-1"),
+            ("CURTAIL_SETTLE_DOWN_S", "-1"),
+            ("CURTAIL_SETTLE_UP_S", "-1"),
+        ]:
+            monkeypatch.setenv(var, val)
+            c = Config(options_path=_missing_options_path(tmp_path))
+            assert c.validate(), (var, val)
+            monkeypatch.delenv(var)
+
+    def test_curtailer_kwargs(self, clean_env, tmp_path):
+        c = self._cfg(tmp_path)
+        assert c.curtailer_kwargs() == {
+            "rated_w": 6000,
+            "target_w": -30,
+            "deadband_w": 30,
+            "step_pct": 1,
+            "min_write_s": 3,
+            "settle_down_s": 20,
+            "settle_up_s": 5,
+        }
+
+    def test_curtail_options_from_env(self, clean_env, monkeypatch, tmp_path):
+        monkeypatch.setenv("CURTAIL_EXPORT_ENTITY", "binary_sensor.a")
+        monkeypatch.setenv("IMPORT_PAYS_ENTITY", "binary_sensor.b")
+        monkeypatch.setenv("SOLAR_LIMIT_ENTITY", "number.lim")
+        monkeypatch.setenv("SOLAR_RATED_W", "8000")
+        c = Config(options_path=_missing_options_path(tmp_path))
+        assert c.curtail_export_entity == "binary_sensor.a"
+        assert c.import_pays_entity == "binary_sensor.b"
+        assert c.solar_limit_entity == "number.lim"
+        assert c.solar_rated_w == 8000
+        assert c.curtailer_kwargs()["rated_w"] == 8000

@@ -49,6 +49,24 @@ options:
   #     allow_grid_export.
   setpoint_entity: ""
 
+  # ─── Solar curtailment (optional) ───
+  # Throttles the inverter by writing ONLY its active power limit (0xF001)
+  # through solar_limit_entity. Fails open: unreachable/unavailable gates
+  # mean no curtailment, and the limit is restored to 100%.
+  #   curtail_export_entity: on → exporting earns nothing/costs money, so
+  #     curtail solar to hold the grid at curtail_target_w.
+  #   import_pays_entity:    on → importing is paid, so curtail solar.
+  curtail_export_entity: ""
+  import_pays_entity: ""
+  solar_limit_entity: ""
+  solar_rated_w: 6000
+  curtail_target_w: -30
+  curtail_deadband_w: 30
+  curtail_step_pct: 1
+  curtail_min_write_s: 3
+  curtail_settle_down_s: 20
+  curtail_settle_up_s: 5
+
   # Opt out of the "never charge from the grid" hard rule. Off by default.
   # Only meaningful on a dynamic tariff where a cheap hour is worth banking
   # against an expensive one. Needs force_charge_entity set.
@@ -105,6 +123,16 @@ schema:
   force_charge_entity: "str?"
   force_discharge_entity: "str?"
   setpoint_entity: "str?"
+  curtail_export_entity: "str?"
+  import_pays_entity: "str?"
+  solar_limit_entity: "str?"
+  solar_rated_w: "int(500,30000)"
+  curtail_target_w: "int(-500,500)"
+  curtail_deadband_w: "int(0,500)"
+  curtail_step_pct: "int(1,100)"
+  curtail_min_write_s: "int(1,300)"
+  curtail_settle_down_s: "int(0,600)"
+  curtail_settle_up_s: "int(0,600)"
   allow_grid_charge: bool
   allow_grid_export: bool
 
