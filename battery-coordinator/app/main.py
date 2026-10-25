@@ -110,9 +110,12 @@ async def main() -> None:
                     # SETPOINT at 0 is the optimiser saying "hold": the
                     # Zendure may sit there for hours, so park it in flash
                     # standby like SLEEP rather than a RAM hold-zero.
+                    # ensure_standby skips the write when this tick's read
+                    # already shows flash standby, so the idle heartbeat
+                    # heals drift without a flash write per beat.
                     if brain.state in (State.SLEEP, State.PIB_DISCHARGE, State.SETPOINT):
-                        ok = await io.zendure.standby(session)
-                        sent = " SENT standby"
+                        ok, written = await io.zendure.ensure_standby(session)
+                        sent = " SENT standby" if written else ""
                     else:
                         ok = await io.zendure.hold_zero(session)
                         sent = " SENT hold-zero"

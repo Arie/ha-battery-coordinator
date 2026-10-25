@@ -31,6 +31,11 @@ class ZendureStatus:
     inverter_temp: float  # °C
     pack_count: int
     sn: str
+    smart_mode: int = -1  # 0=flash, 1=RAM, -1=not reported
+
+    @property
+    def in_flash_standby(self) -> bool:
+        return self.smart_mode == 0 and self.input_limit == 0 and self.output_limit == 0
 
 
 @dataclass
@@ -96,6 +101,7 @@ class ZendureDevice:
             inverter_temp=temp,
             pack_count=props.get("packNum", 0),
             sn=self._sn,
+            smart_mode=props.get("smartMode", -1),
         )
         self._last_status = status
         return status
@@ -144,6 +150,21 @@ class ZendureDevice:
         already-zero target, call hold_zero() instead.
         """
         return await self._write(session, {"smartMode": 0, "outputLimit": 0, "inputLimit": 0})
+
+    async def ensure_standby(self, session: aiohttp.ClientSession) -> tuple[bool, bool]:
+        """Flash standby, but only if the last read says we are not in it.
+
+        The idle heartbeat re-asserts standby every few minutes; calling
+        standby() each time is a flash write per beat. The device reports
+        smartMode and both limits, so a beat that finds them already at
+        flash standby has nothing to heal. Anything else (RAM zero, a limit
+        set from the app, smartMode not reported) gets the write.
+
+        Returns (ok, written).
+        """
+        if self._last_status is not None and self._last_status.in_flash_standby:
+            return True, False
+        return await self.standby(session), True
 
     async def hold_zero(self, session: aiohttp.ClientSession) -> bool:
         """RAM-only zero — same effective state as standby (no charge,

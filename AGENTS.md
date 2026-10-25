@@ -98,7 +98,7 @@ the Zendure creates as surplus and charge off our own output.
 - **PIB permissions are the cross-charge lock.** When Zen leads discharge, PIBs are set `discharge_allowed` only — they physically cannot charge from Zen surplus.
 - **Last-known caching on Zendure read.** A failed HTTP read returns the previous status, not zeros — a network blip won't trigger spurious "Zen drained" transitions.
 - **Heartbeat re-assertion.** Brain re-emits `pib_mode/permissions` every 5 min and Zen `target=0` every 30s. Silent drift (failed PUT, external app toggle, firmware reboot) self-heals within a bounded window.
-- **Flash vs RAM standby.** First entry to `target=0` writes flash (`smartMode: 0`). Heartbeat re-assertions write RAM (`smartMode: 1` + both limits 0). Same effective state, no flash wear.
+- **Flash vs RAM standby.** In the idle states (`SLEEP`, `PIB_DISCHARGE`, `SETPOINT` at 0) `target=0` goes through `ensure_standby()`: flash standby (`smartMode: 0`, both limits 0), written only when the tick's read shows the device is not already in it. The 5-min idle heartbeat therefore heals drift without a flash write per beat. A RAM zero (`smartMode: 1` + both limits 0) is used for `target=0` in the active states, where the next command is seconds away.
 - **PIB permission failures retry next tick.** A failed `set_mode` PUT calls `brain.mark_pib_send_failed()`, which rewinds the heartbeat timer so the next tick re-emits — not after 5 min.
 - **Startup detection has a 2s holdoff.** A single noisy first reading can't lock the brain into a wrong state.
 - **p1_contradicts requires 3s sustained.** Brief P1 spikes during charge/discharge no longer accelerate step-down.

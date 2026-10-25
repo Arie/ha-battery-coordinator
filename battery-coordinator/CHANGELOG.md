@@ -1,3 +1,7 @@
+## 1.6.2
+
+- **Stop writing flash on every idle heartbeat.** In `SLEEP`, `PIB_DISCHARGE` and `SETPOINT` at 0 the 5-minute heartbeat re-sent the flash standby (`smartMode: 0`) each time — 206 flash writes in one day on a live install, ~75k a year, and with an optimiser holding for hours this is the common case. The documented design was a RAM re-assertion, but a RAM write (`smartMode: 1`) would take the device out of the flash standby it is meant to sit in. The heartbeat now checks the read it already does every tick: if the Zendure reports `smartMode: 0` with both limits at 0 there is nothing to heal and nothing is written; anything else (RAM zero, a limit set from the app, a firmware that does not report `smartMode`) still gets the flash write, so drift self-heals as before and an unexpected firmware falls back to the old behaviour.
+
 ## 1.6.1
 
 - **At a 0 setpoint the plug-in batteries cover the house again, but still never charge.** 1.6.0 put them in `standby`, treating the optimiser's hold as a hold for the whole fleet. It is not: DAO plans the Zendure alone, so its 0 means "keep the Zendure's SOC for later" and says nothing about the PIBs. In practice that left full PIBs idle through an expensive evening while the house imported. They now get zero mode with `discharge_allowed` only. Until the Zendure has actually stopped (below the 50W pilot floor) they stay in `standby`, because on a charge -> hold change they would otherwise read its ramping-down import as load and feed it; the band change is re-issued as soon as it settles.

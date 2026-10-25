@@ -52,7 +52,7 @@ class _FakeSession:
         return _FakeResponse(**item)
 
 
-_GOOD_REPORT = {
+_GOOD_REPORT: dict[str, Any] = {
     "sn": "HEC-TEST",
     "properties": {
         "acMode": 1,
@@ -225,13 +225,9 @@ class _RecordingSession:
 
 
 class TestZendureStandbyFlashWear:
-    """standby() persists smartMode=0 to flash; the brain re-asserts target=0
-    every 30s in SLEEP / PIB_DISCHARGE. Flashing every 30s wears the device.
-
-    Heartbeat re-assertions for an already-zero target should use a
-    RAM-only command, not a flash write. The first transition into
-    target=0 should still flash so the device deep-sleeps across reboots.
-    """
+    """standby() persists smartMode=0 to flash; hold_zero() is the RAM-only
+    zero used in the active states. Idle heartbeats avoid the flash write
+    through ensure_standby() (see TestZendureEnsureStandby)."""
 
     @pytest.mark.asyncio
     async def test_standby_writes_flash_smartmode_zero(self):
@@ -763,3 +759,75 @@ class TestOptionalHANumber:
         )
         for now in (0.0, 1.0, 2.0):
             assert await num.read(session, now=now) is None
+
+
+class _ReadWriteSession:
+    """Serves one scripted Zendure report on get() and records post()s."""
+
+    def __init__(self, report):
+        self._report = report
+        self.writes: list[dict[str, Any]] = []
+
+    def get(self, url, timeout=None):
+        return _FakeResponse(status=200, payload=self._report)
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.writes.append({"url": url, "json": json})
+        return _FakeResponse(status=200, payload={})
+
+
+def _report(**props):
+    return {"sn": "HEC-TEST", "properties": {**_GOOD_REPORT["properties"], **props}}
+
+
+class TestZendureEnsureStandby:
+    """The idle heartbeat re-asserts standby every 5 min. Writing smartMode=0
+    each time is a flash write per beat (~100k a year); the device already
+    reports whether it is in flash standby, so only write when it is not."""
+
+    @pytest.mark.asyncio
+    async def test_read_carries_smart_mode(self):
+        zen = ZendureDevice("1.2.3.4")
+        status = await zen.read(_ReadWriteSession(_report(smartMode=0)))
+        assert status.smart_mode == 0
+
+    @pytest.mark.asyncio
+    async def test_smart_mode_unknown_when_not_reported(self):
+        zen = ZendureDevice("1.2.3.4")
+        status = await zen.read(_ReadWriteSession(_GOOD_REPORT))
+        assert status.smart_mode == -1
+
+    @pytest.mark.asyncio
+    async def test_already_in_flash_standby_skips_the_write(self):
+        zen = ZendureDevice("1.2.3.4")
+        session = _ReadWriteSession(_report(smartMode=0, inputLimit=0, outputLimit=0))
+        await zen.read(session)
+        ok, written = await zen.ensure_standby(session)
+        assert ok and not written
+        assert session.writes == []
+
+    @pytest.mark.parametrize(
+        "props",
+        [
+            {"smartMode": 1, "inputLimit": 0, "outputLimit": 0},  # RAM zero
+            {"smartMode": 0, "inputLimit": 800, "outputLimit": 0},  # drifted
+            {"smartMode": 0, "inputLimit": 0, "outputLimit": 300},  # drifted
+            {"inputLimit": 0, "outputLimit": 0},  # smartMode not reported
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_anything_else_writes_flash_standby(self, props):
+        zen = ZendureDevice("1.2.3.4")
+        session = _ReadWriteSession(_report(**props))
+        await zen.read(session)
+        ok, written = await zen.ensure_standby(session)
+        assert ok and written
+        assert session.writes[0]["json"]["properties"]["smartMode"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_read_yet_writes_flash_standby(self):
+        zen = ZendureDevice("1.2.3.4")
+        zen._sn = "TEST"
+        session = _ReadWriteSession(_GOOD_REPORT)
+        ok, written = await zen.ensure_standby(session)
+        assert ok and written
