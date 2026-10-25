@@ -106,7 +106,7 @@ def test_solar_zero_never_trims_down():
     assert w == []
 
 
-def test_cloud_while_throttled_trims_up():
+def test_cloud_holds_limit_until_inverter_is_held_back():
     """The sun, not the limit, binds under a cloud: raising the limit would
     only queue up an export burst for when the sun returns."""
     c = SolarCurtailer()
@@ -116,6 +116,26 @@ def test_cloud_while_throttled_trims_up():
     w = _run(c, 10, t0=61, curtail=True, p1=400, solar_w=2380)
     assert w and w[0][0] == 61 + c.settle_up_s
     assert w[0][1].reason == "trim up" and w[0][1].write > 40
+
+
+def test_stale_solar_reading_does_not_block_trim_up():
+    """An unreachable solar sensor reads 0: fail open, not held at the limit."""
+    c = SolarCurtailer()
+    _put(c, 40)
+    w = _run(c, 10, t0=1, curtail=True, p1=400, solar_w=0)
+    assert w and w[0][0] == 1 + c.settle_up_s
+    assert w[0][1].reason == "trim up" and w[0][1].write > 40
+
+
+def test_sustained_import_trims_up_even_when_not_held_back():
+    """solar_rated_w set too high makes the cap look unreached forever; a
+    minute of import overrides the held-back test."""
+    c = SolarCurtailer(rated_w=6000)
+    _put(c, 30)  # 1800 W cap, solar stuck at 1500 (< cap - margin)
+    w = _run(c, 120, t0=1, curtail=True, p1=400, solar_w=1500)
+    assert w
+    assert w[0][0] >= 1 + c.UNHELD_IMPORT_S
+    assert w[0][1].reason == "trim up" and w[0][1].write > 30
 
 
 def test_failed_write_retries_after_min_interval():

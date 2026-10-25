@@ -25,6 +25,9 @@ class SolarCurtailer:
     # below it the sun, not the limit, binds, and raising the limit would
     # only queue up an export burst for when the sun returns.
     HELD_BACK_MARGIN_W: ClassVar[int] = 150
+    # Fail open: an import that outlasts this trims up even when the panels
+    # look short of the cap (solar_rated_w set too high, sensor off).
+    UNHELD_IMPORT_S: ClassVar[int] = 60
 
     def __init__(
         self,
@@ -51,6 +54,8 @@ class SolarCurtailer:
         self._last_write_t: float | None = None
         self._down_since: float | None = None
         self._up_since: float | None = None
+        # Continuous import, regardless of held-back; writes do not reset it.
+        self._import_since: float | None = None
 
     @property
     def limit(self) -> int | None:
@@ -83,6 +88,7 @@ class SolarCurtailer:
     ) -> CurtailDecision:
         if not (curtail or import_pays):
             self._reset_timers()
+            self._import_since = None
             if self._limit == 100:
                 return NO_WRITE
             reason = "startup" if self._limit is None and not self._ever_attempted else "gate off"
@@ -90,6 +96,7 @@ class SolarCurtailer:
 
         if import_pays:
             self._reset_timers()
+            self._import_since = None
             if self._limit != 0:
                 return self._throttled(0, "import pays", t)
             return self._heartbeat(t)
@@ -124,8 +131,18 @@ class SolarCurtailer:
 
     def _trim(self, *, p1: float, solar_w: float, saturated: bool, t: float) -> CurtailDecision:
         want_down = p1 < self.target_w - self.deadband_w and saturated
-        held_back = self._limit is None or solar_w >= self._limit / 100 * self.rated_w - self.HELD_BACK_MARGIN_W
-        want_up = p1 > self.target_w + self.deadband_w and held_back
+        importing = p1 > self.target_w + self.deadband_w
+        if not importing:
+            self._import_since = None
+        elif self._import_since is None:
+            self._import_since = t
+        held_back = (
+            self._limit is None
+            or solar_w <= 0  # stale reading: fail open
+            or solar_w >= self._limit / 100 * self.rated_w - self.HELD_BACK_MARGIN_W
+            or (self._import_since is not None and t - self._import_since >= self.UNHELD_IMPORT_S)
+        )
+        want_up = importing and held_back
         if want_down:
             if self._down_since is None:
                 self._down_since = t

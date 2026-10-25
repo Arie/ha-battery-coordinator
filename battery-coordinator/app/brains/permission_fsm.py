@@ -140,6 +140,8 @@ class PermissionFSM:
 
     # Zendure capacity thresholds
     ZEN_MAXED_FRAC = 0.95  # Zendure above this fraction of max → considered maxed
+    PIB_FULL_SOC = 99  # every PIB at/above this SOC → PIBs can take no more
+    PIB_SATURATED_FRAC = 0.9  # PIBs charging at this fraction of their cap → saturated
     ZEN_HELP_EXIT_FRAC = 0.8  # total discharge below this fraction → PIBs redundant
 
     # PIB taper
@@ -601,19 +603,34 @@ class PermissionFSM:
         not a cost. Under a setpoint the Zendure follows the optimiser and
         cannot take more, so only the PIBs count. A PIB in taper still has
         headroom (480 W at 95%), so the PIBs are full only when they are
-        (near) 100% or already charging at ~their combined cap.
+        (near) 100% or already charging at ~their combined cap. A battery
+        that is not permitted to charge cannot soak anything either.
         """
         zen_full = (
             self.state == State.SETPOINT
+            or r.inhibit_charge
             or r.zen_soc >= self.zen_soc_max
             or r.zen_power >= self.max_charge * self.ZEN_MAXED_FRAC
         )
         pibs_full = (
             not r.pib_socs
-            or all(s >= 99 for s in r.pib_socs)
-            or sum(max(0.0, p) for p in r.pibs) >= 0.9 * _total_charge_cap(r)
+            or not self._pibs_may_charge()
+            or all(s >= self.PIB_FULL_SOC for s in r.pib_socs)
+            or sum(max(0.0, p) for p in r.pibs) >= self.PIB_SATURATED_FRAC * _total_charge_cap(r)
         )
         return zen_full and pibs_full
+
+    def _pibs_may_charge(self) -> bool:
+        """The brain's current desired PIB action lets them charge.
+
+        Unknown (nothing emitted yet) counts as may-charge: it must not
+        claim saturation it has no evidence for.
+        """
+        if self._pib_mode_desired is None:
+            return True
+        if self._pib_mode_desired == "standby":
+            return False
+        return self._pib_perms_desired is not None and "charge_allowed" in self._pib_perms_desired
 
     def _zendure_exports(self, r: Reading) -> bool:
         """The Zendure is, or is about to be, discharging."""

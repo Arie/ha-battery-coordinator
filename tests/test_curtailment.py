@@ -143,10 +143,17 @@ class TestBatteriesSaturated:
 
     def test_tapering_pibs_with_headroom_are_not_saturated(self):
         """95% still takes 480 W each: idle PIBs there can soak more."""
+        # curtail_export keeps the PIBs charge-only under a 0 setpoint; plain
+        # 0 would make them discharge-only, i.e. not permitted to soak.
         brain = _brain()
-        _run(brain, _r(setpoint=0), ticks=5)
+        _run(brain, _r(setpoint=0, curtail_export=True), ticks=5)
         assert brain.batteries_saturated(_r(setpoint=0, pibs=(100, 100), pib_socs=(95, 95))) is False
         assert brain.batteries_saturated(_r(setpoint=0, pibs=(480, 480), pib_socs=(95, 95))) is True
+
+    def test_pibs_not_permitted_to_charge_count_as_saturated_under_setpoint(self):
+        brain = _brain()
+        _run(brain, _r(setpoint=0), ticks=5)  # discharge_allowed only
+        assert brain.batteries_saturated(_r(setpoint=0, pib_socs=(50, 50))) is True
 
     def test_saturated_without_setpoint(self):
         brain = _brain()
@@ -156,6 +163,15 @@ class TestBatteriesSaturated:
         assert brain.batteries_saturated(_r(zen_soc=60, zen_power=400, pib_socs=(100, 100))) is False
         assert brain.batteries_saturated(_r(zen_soc=60, zen_power=2300, pib_socs=(100, 100))) is True
         assert brain.batteries_saturated(_r(zen_soc=100, pib_socs=(50, 100))) is False
+
+    def test_batteries_not_permitted_to_charge_count_as_saturated(self):
+        brain = _brain()
+        r = _r(p1=-1500, zen_soc=50, pib_socs=(50, 50), curtail_export=True)
+        _run(brain, r, ticks=20)
+        assert brain.batteries_saturated(r) is False
+        inhibited = _r(p1=-1500, zen_soc=50, pib_socs=(50, 50), curtail_export=True, inhibit_charge=True)
+        _run(brain, inhibited, ticks=20, t0=20)
+        assert brain.batteries_saturated(inhibited) is True
 
     def test_saturated_with_no_pibs(self):
         brain = _brain()
@@ -203,6 +219,8 @@ class TestInhibitChargeBlocksImportPays:
 
 class _CurtailLoop:
     """Close the P1 loop around the brain and the curtailer, 1 s per tick.
+
+    The model PIBs never discharge, and to_full is idle here (no import_pays).
 
     Inverter: solar = min(sun, limit% of 6000 W); a write takes effect the
     tick after it is made. Two PIBs in HomeWizard zero mode move 1/20 of
@@ -288,17 +306,21 @@ class _CurtailLoop:
 
 class TestCurtailClosedLoop:
     def test_soaks_before_throttling(self):
-        loop = _CurtailLoop(load_w=500, pib_soc=60, sun_w=4000)
-        samples = loop.run(5000)
-        # The first minute is the model PIBs' own 1/20-per-tick ramp-in.
-        assert all(t >= 60 for t, _ in loop.writes)
-        settled = samples[60:]
-        over = [s for s in settled if s["sun"] - loop.load_w > s["cap"]]
-        under = [s for s in settled if s["sun"] - loop.load_w <= s["cap"]]
+        # Morning: 1800 W of sun leaves a 1300 W surplus, within the PIBs'
+        # 1600 W cap. Then full sun: 3500 W, more than they can take.
+        loop = _CurtailLoop(load_w=500, pib_soc=60, sun_w=1800)
+        morning = loop.run(600)
+        loop.sun_w = 4000
+        noon = loop.run(5000)
+        under = [s for s in morning + noon if s["sun"] - loop.load_w <= s["cap"]]
+        assert under
+        assert all(s["limit"] == 100 for s in under)
+        # Unthrottled samples in the minute after the sun change are the
+        # model PIBs' own 1/20-per-tick ramp, not throttling: skip those.
+        over = [s for s in noon if s["sun"] - loop.load_w > s["cap"] and (s["limit"] < 100 or s["t"] >= 660)]
         assert over  # the surplus outran the PIBs, so throttling was in play
         starved = [s for s in over if s["pib"] < 0.9 * s["cap"]]
         assert not starved, starved[:3]
-        assert all(s["limit"] == 100 for s in under)
         assert any(w < 100 for _, w in loop.writes), "never throttled the excess"
 
     def test_holds_p1_in_band_once_full(self):
