@@ -243,6 +243,9 @@ class PermissionFSM:
         self._pib_mode_desired: str | None = None
         self._pib_perms_desired: list[str] | None = None
         self._pib_send_t: float = -999
+        # import_pays was overriding the PIB action last tick, so its end
+        # can re-issue the state's own action once.
+        self._import_pays_active: bool = False
 
         self.state = State.SLEEP
         self._zen_step_idx = 0
@@ -562,10 +565,67 @@ class PermissionFSM:
         State.PIB_DISCHARGE: "inhibit_discharge",
     }
 
+    _DISCHARGE_STATES: ClassVar[frozenset[State]] = frozenset(
+        {State.DISCHARGE, State.DISCHARGE_HELP, State.PIB_DISCHARGE}
+    )
+
+    # The PIB (mode, permissions) each state's entry transitions emit, so
+    # the action can be re-issued when the import-pays override lifts.
+    # SETPOINT is absent: its PIB action depends on the setpoint band.
+    _STATE_PIB: ClassVar[dict[State, tuple[str, list[str] | None]]] = {
+        State.SLEEP: ("standby", None),
+        State.CHARGE: ("zero", ["charge_allowed"]),
+        State.DISCHARGE: ("standby", None),
+        State.DISCHARGE_HELP: ("zero", ["discharge_allowed"]),
+        State.PIB_DISCHARGE: ("zero", ["discharge_allowed"]),
+        State.GRID_CHARGE: ("to_full", ["charge_allowed"]),
+        State.FORCE_DISCHARGE: ("zero", ["discharge_allowed"]),
+    }
+
     def _is_inhibited(self, state: State, r: Reading) -> bool:
         """True if an external gate forbids this state on this reading."""
         flag = self._INHIBITED_BY.get(state)
-        return flag is not None and bool(getattr(r, flag))
+        if flag is not None and bool(getattr(r, flag)):
+            return True
+        # While exporting costs money (or buying pays), discharging into
+        # the house only pushes more solar out to the grid. Kept off
+        # inhibit_discharge on purpose: that flag cancels a DAO setpoint in
+        # _setpoint_for, and this guard must leave a setpoint alone.
+        return state in self._DISCHARGE_STATES and r.setpoint is None and (r.curtail_export or r.import_pays)
+
+    def batteries_saturated(self, r: Reading) -> bool:
+        """True when neither battery system can soak more surplus right now.
+
+        The curtailment controller throttles the panels only once this is
+        True: an export the batteries could still absorb is free storage,
+        not a cost. Under a setpoint the Zendure follows the optimiser and
+        cannot take more, so only the PIBs count.
+        """
+        zen_full = (
+            self.state == State.SETPOINT
+            or r.zen_soc >= self.zen_soc_max
+            or r.zen_power >= self.max_charge * self.ZEN_MAXED_FRAC
+        )
+        pibs_full = not r.pib_socs or _all_in_taper(r, self.PIB_TAPER_CAP)
+        return zen_full and pibs_full
+
+    def _zendure_exports(self, r: Reading) -> bool:
+        """The Zendure is, or is about to be, discharging."""
+        return (
+            self.state == State.FORCE_DISCHARGE
+            or (self.state == State.SETPOINT and self._setpoint_w < 0)
+            or r.zen_power < -PILOT_W
+        )
+
+    def _import_pays_pib(self, r: Reading) -> tuple[str, list[str] | None]:
+        """PIB action while buying pays: fill from the grid, never from us.
+
+        to_full charges regardless of P1, so it would charge from the
+        Zendure's own export too; standby is the cross-charge lock here.
+        """
+        if self._zendure_exports(r):
+            return "standby", None
+        return "to_full", ["charge_allowed"]
 
     def _wants_grid_charge(self, r: Reading) -> bool:
         """Deliberate grid import requested, permitted, and still useful.
@@ -621,7 +681,7 @@ class PermissionFSM:
             return 0
         return max(-self.max_discharge, min(self.max_charge, sp))
 
-    def _setpoint_pib_for(self, sp: int, zen_power: float) -> tuple[str, list[str] | None]:
+    def _setpoint_pib_for(self, sp: int, zen_power: float, curtail: bool = False) -> tuple[str, list[str] | None]:
         """PIB (mode, permissions) that follow a setpoint as closely as they can.
 
         The PIBs have no watt setpoint, so they approximate the optimiser's
@@ -631,6 +691,12 @@ class PermissionFSM:
                                The PIBs keep covering the house but never
                                charge. Held in standby until the Zendure has
                                actually stopped.
+          0 .. partial, while curtailing
+                            -> zero, charge only: exporting costs money, so
+                               the PIBs soak surplus the optimiser did not
+                               plan for. Held in standby while the Zendure
+                               is still discharging, or they would charge
+                               from its ramp-down.
           full-rate charge  -> to_full: the optimiser wants energy in now.
           partial charge    -> zero, charge only: soak surplus, never fight.
           discharge         -> zero, discharge only: cover load, never fight.
@@ -641,6 +707,10 @@ class PermissionFSM:
         """
         if sp >= self.max_charge:
             return "to_full", ["charge_allowed"]
+        if curtail and sp >= 0:
+            if zen_power < -PILOT_W:
+                return "standby", None
+            return "zero", ["charge_allowed"]
         if sp > 0:
             return "zero", ["charge_allowed"]
         if sp < 0 or abs(zen_power) < PILOT_W:
@@ -702,7 +772,7 @@ class PermissionFSM:
         # (folded into _setpoint_for), but above the transition table.
         sp = self._setpoint_for(r)
         if sp is not None:
-            pib = self._setpoint_pib_for(sp, r.zen_power)
+            pib = self._setpoint_pib_for(sp, r.zen_power, r.curtail_export or r.import_pays)
             self._setpoint_w = sp
             if self.state != State.SETPOINT or pib != self._setpoint_pib:
                 if self.state != State.SETPOINT:
@@ -885,12 +955,34 @@ class PermissionFSM:
         # External gates run first — they can override any state, and a
         # state they force must not then be re-evaluated by that state's
         # own table on the same tick.
+        # When import_pays lifts in SETPOINT, forget the band SETPOINT last
+        # emitted so the setpoint branch re-issues it (with a forced send)
+        # instead of staying quiet because its band did not change.
+        import_pays_ended = self._import_pays_active and not r.import_pays
+        if import_pays_ended and self.state == State.SETPOINT:
+            self._setpoint_pib = None
+
         inhibited = False
         gated = self._apply_gates(r, t)
         if gated is not None:
             pib_mode, pib_permissions, inhibited = gated
         else:
             pib_mode, pib_permissions = self._check_transitions(r, pib_abs, t)
+
+        # Import-pays overrides whatever PIB action the gates or the table
+        # chose. It feeds the same desired-state bookkeeping below, so the
+        # heartbeat re-asserts the override rather than the state's action.
+        if r.import_pays:
+            self._import_pays_active = True
+            override = self._import_pays_pib(r)
+            if override != (self._pib_mode_desired, self._pib_perms_desired):
+                pib_mode, pib_permissions = override
+            else:
+                pib_mode, pib_permissions = None, None
+        elif import_pays_ended:
+            self._import_pays_active = False
+            if pib_mode is None and pib_permissions is None and self.state in self._STATE_PIB:
+                pib_mode, pib_permissions = self._STATE_PIB[self.state]
 
         # Track desired PIB state across ticks so the heartbeat can re-assert
         # it. Update on transition; otherwise re-emit when PIB_HEARTBEAT_S
