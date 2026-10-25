@@ -170,3 +170,21 @@ def test_lock_never_charge_while_zendure_exports():
                     if d.target < 0:
                         assert "charge_allowed" not in perms, (sp, curtail, import_pays, brain.state)
                     zen += (d.target - zen) * 0.5
+
+
+class TestInhibitChargeBlocksImportPays:
+    """A stop request beats a go request: inhibit_charge outranks the
+    import-pays to_full override, as it outranks force_charge."""
+
+    def test_inhibit_charge_blocks_import_pays_override(self):
+        brain = _brain()
+        ds = _run(brain, _r(import_pays=True, inhibit_charge=True), ticks=10)
+        assert not any(mode == "to_full" for mode, _ in _perms(ds))
+        ds = _run(brain, _r(import_pays=True), ticks=10, t0=10)
+        assert _perms(ds) == [("to_full", ["charge_allowed"])]
+
+    def test_inhibit_charge_rising_restores_state_action(self):
+        brain = _brain()
+        ds = _run(brain, _r(import_pays=True), ticks=5)
+        ds += _run(brain, _r(import_pays=True, inhibit_charge=True), ticks=5, t0=5)
+        assert _perms(ds) == [("to_full", ["charge_allowed"]), ("standby", None)]

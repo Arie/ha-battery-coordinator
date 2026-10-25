@@ -952,16 +952,20 @@ class PermissionFSM:
             self._zen_stuck_since = None
             self._zen_is_stuck = False
 
-        # External gates run first — they can override any state, and a
-        # state they force must not then be re-evaluated by that state's
-        # own table on the same tick.
-        # When import_pays lifts in SETPOINT, forget the band SETPOINT last
-        # emitted so the setpoint branch re-issues it (with a forced send)
-        # instead of staying quiet because its band did not change.
-        import_pays_ended = self._import_pays_active and not r.import_pays
+        # The import-pays override applies only while inhibit_charge is
+        # off: a stop request beats a go request, exactly as inhibit_charge
+        # outranks force_charge. When the override lifts in SETPOINT, forget
+        # the band SETPOINT last emitted so the setpoint branch re-issues it
+        # (with a forced send) instead of staying quiet because its band did
+        # not change.
+        import_pays_on = r.import_pays and not r.inhibit_charge
+        import_pays_ended = self._import_pays_active and not import_pays_on
         if import_pays_ended and self.state == State.SETPOINT:
             self._setpoint_pib = None
 
+        # External gates run first — they can override any state, and a
+        # state they force must not then be re-evaluated by that state's
+        # own table on the same tick.
         inhibited = False
         gated = self._apply_gates(r, t)
         if gated is not None:
@@ -972,7 +976,7 @@ class PermissionFSM:
         # Import-pays overrides whatever PIB action the gates or the table
         # chose. It feeds the same desired-state bookkeeping below, so the
         # heartbeat re-asserts the override rather than the state's action.
-        if r.import_pays:
+        if import_pays_on:
             self._import_pays_active = True
             override = self._import_pays_pib(r)
             if override != (self._pib_mode_desired, self._pib_perms_desired):
