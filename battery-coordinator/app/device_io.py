@@ -513,6 +513,41 @@ class OptionalHANumber:
         return None
 
 
+class HANumberWriter:
+    """Write a value to an HA `number` entity via number.set_value.
+
+    The solar-curtailment actuator. Never raises: a failed write returns
+    False and the caller decides whether to retry next tick.
+    """
+
+    def __init__(self, ha_url: str, ha_token: str, entity_id: str, timeout: float = 5):
+        self._url = f"{ha_url}/api/services/number/set_value" if ha_url and entity_id else ""
+        self._entity_id = entity_id
+        self._token = ha_token
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._url)
+
+    async def set_value(self, session: aiohttp.ClientSession, value: int) -> bool:
+        if not self._url:
+            return False
+        try:
+            async with session.post(
+                self._url,
+                json={"entity_id": self._entity_id, "value": value},
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=self._timeout,
+            ) as r:
+                if r.status == 200:
+                    return True
+                log.warning("HA number %s: set_value(%s) HTTP %s", self._entity_id, value, r.status)
+        except Exception as e:
+            log.warning("HA number %s: set_value(%s) failed: %s", self._entity_id, value, e)
+        return False
+
+
 class DeviceIO:
     """Unified device I/O layer. Reads all devices, produces a Reading."""
 
@@ -541,6 +576,16 @@ class DeviceIO:
         )
         self.force_discharge = OptionalHABinarySensor(
             config.ha_url, config.ha_token, config.force_discharge_entity, config.read_timeout
+        )
+        # Solar curtailment: gates in, inverter limit out.
+        self.curtail_export = OptionalHABinarySensor(
+            config.ha_url, config.ha_token, config.curtail_export_entity, config.read_timeout
+        )
+        self.import_pays = OptionalHABinarySensor(
+            config.ha_url, config.ha_token, config.import_pays_entity, config.read_timeout
+        )
+        self.solar_limit = HANumberWriter(
+            config.ha_url, config.ha_token, config.solar_limit_entity, config.write_timeout
         )
         # External optimiser setpoint (W). None when nothing is speaking.
         self.setpoint = OptionalHANumber(config.ha_url, config.ha_token, config.setpoint_entity, config.read_timeout)
@@ -580,6 +625,8 @@ class DeviceIO:
             force_chg_t = tg.create_task(self.force_charge.read(session))
             force_dis_t = tg.create_task(self.force_discharge.read(session))
             setpoint_t = tg.create_task(self.setpoint.read(session))
+            curtail_t = tg.create_task(self.curtail_export.read(session))
+            import_pays_t = tg.create_task(self.import_pays.read(session))
         zen = zen_t.result()
         p1 = p1_t.result()
         solar = solar_t.result()
@@ -611,6 +658,8 @@ class DeviceIO:
             force_charge=force_chg_t.result(),
             force_discharge=force_dis_t.result(),
             setpoint=setpoint_t.result(),
+            curtail_export=curtail_t.result(),
+            import_pays=import_pays_t.result(),
         )
 
         return reading, zen, p1

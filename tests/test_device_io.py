@@ -16,7 +16,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
-from device_io import HWP1Meter, OptionalHABinarySensor, OptionalHASensor, ZendureDevice
+from coordinator_logic import Reading
+from device_io import HANumberWriter, HWP1Meter, OptionalHABinarySensor, OptionalHASensor, ZendureDevice
 
 
 class _FakeResponse:
@@ -216,12 +217,14 @@ class _FakeStateSession:
 class _RecordingSession:
     """Captures every write payload so tests can assert what was sent."""
 
-    def __init__(self):
+    def __init__(self, status: int = 200, raise_on_post: Exception | None = None):
         self.writes: list[dict[str, Any]] = []
+        self._status = status
+        self._raise = raise_on_post
 
     def post(self, url, json=None, headers=None, timeout=None):
-        self.writes.append({"url": url, "json": json})
-        return _FakeResponse(status=200, payload={})
+        self.writes.append({"url": url, "json": json, "headers": headers})
+        return _FakeResponse(status=self._status, payload={}, raise_on_get=self._raise)
 
 
 class TestZendureStandbyFlashWear:
@@ -831,3 +834,43 @@ class TestZendureEnsureStandby:
         session = _ReadWriteSession(_GOOD_REPORT)
         ok, written = await zen.ensure_standby(session)
         assert ok and written
+
+
+class TestHANumberWriter:
+    @pytest.mark.asyncio
+    async def test_number_writer_posts_set_value(self):
+        s = _RecordingSession()
+        w = HANumberWriter("http://ha", "tok", "number.lim")
+        assert w.configured
+        assert await w.set_value(s, 42) is True
+        assert s.writes[0]["url"] == "http://ha/api/services/number/set_value"
+        assert s.writes[0]["json"] == {"entity_id": "number.lim", "value": 42}
+        assert s.writes[0]["headers"]["Authorization"] == "Bearer tok"
+
+    @pytest.mark.asyncio
+    async def test_number_writer_non_200_is_failure(self):
+        s = _RecordingSession(status=500)
+        w = HANumberWriter("http://ha", "tok", "number.lim")
+        assert await w.set_value(s, 42) is False
+
+    @pytest.mark.asyncio
+    async def test_number_writer_exception_is_failure(self):
+        s = _RecordingSession(raise_on_post=RuntimeError("boom"))
+        w = HANumberWriter("http://ha", "tok", "number.lim")
+        assert await w.set_value(s, 42) is False
+
+    @pytest.mark.asyncio
+    async def test_number_writer_unconfigured_is_noop(self):
+        s = _RecordingSession()
+        w = HANumberWriter("http://ha", "tok", "")
+        assert w.configured is False
+        assert await w.set_value(s, 42) is False
+        assert s.writes == []
+
+
+def test_reading_carries_curtail_flags():
+    r = Reading(p1=0, pibs=[], pib_socs=[], zen_power=0, zen_soc=50, curtail_export=True, import_pays=True)
+    assert r.curtail_export and r.import_pays
+    assert "curtail_export=True" in repr(r)
+    d = Reading(p1=0, pibs=[], pib_socs=[], zen_power=0, zen_soc=50)
+    assert not d.curtail_export and not d.import_pays

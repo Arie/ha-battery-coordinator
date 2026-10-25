@@ -32,8 +32,10 @@ class Reading:
     """
 
     __slots__ = (
+        "curtail_export",
         "force_charge",
         "force_discharge",
+        "import_pays",
         "inhibit_charge",
         "inhibit_discharge",
         "p1",
@@ -59,6 +61,8 @@ class Reading:
         force_charge: bool = False,
         force_discharge: bool = False,
         setpoint: float | None = None,
+        curtail_export: bool = False,
+        import_pays: bool = False,
     ):
         self.p1 = p1
         self.pibs = list(pibs)
@@ -71,6 +75,8 @@ class Reading:
         self.force_charge = force_charge
         self.force_discharge = force_discharge
         self.setpoint = setpoint
+        self.curtail_export = curtail_export
+        self.import_pays = import_pays
 
         if len(self.pibs) != len(self.pib_socs):
             raise ValueError(
@@ -88,7 +94,8 @@ class Reading:
             f"zen_power={self.zen_power}, zen_soc={self.zen_soc}, solar={self.solar}, "
             f"inhibit_discharge={self.inhibit_discharge}, inhibit_charge={self.inhibit_charge}, "
             f"force_charge={self.force_charge}, force_discharge={self.force_discharge}, "
-            f"setpoint={self.setpoint})"
+            f"setpoint={self.setpoint}, curtail_export={self.curtail_export}, "
+            f"import_pays={self.import_pays})"
         )
 
 
