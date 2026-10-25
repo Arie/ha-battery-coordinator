@@ -23,3 +23,6 @@ tests/data/day_analysis.json
 .DS_Store
 history.csv
 .env
+
+# Local design notes, not shipped
+docs/
