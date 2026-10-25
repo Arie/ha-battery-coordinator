@@ -197,7 +197,7 @@ Brain defaults live in `PermissionFSM.DEFAULTS` (canonical), with class constant
 | PIB_HIGH | 1200W | Combined PIB above this → step Zen up |
 | PIB_MAXED | 1400W | Combined PIB above this → fast step-up |
 | PIB_LOW | 200W | Combined PIB below this → step Zen down |
-| PIB_TAPER_CAP | 600W | Per-PIB charge cap below this = in taper zone |
+| PIB_TAPER_CAP | 300W | Per-PIB charge cap below this = in taper zone |
 | PIB_CHARGE_DETECT | 100W | Startup: combined PIB > this → adopt CHARGE |
 | PIB_DISCHARGE_DETECT | -100W | Startup: combined PIB < this → adopt DISCHARGE |
 | STEP_HOLDOFF | 15s | Sustained PIB saturation before stepping |
