@@ -21,7 +21,7 @@ from datetime import datetime
 import aiohttp
 from brains.permission_fsm import PermissionFSM, State
 from config import Config
-from curtail_io import CurtailIO
+from curtail_io import P1_STALE_S, CurtailIO, p1_stale
 from curtailer import SolarCurtailer
 from device_io import DeviceIO
 
@@ -116,6 +116,7 @@ async def main() -> None:
             prev_gates = ""
             prev_target: int | None = None
             last_info_t = 0.0
+            prev_p1_stale = False
 
             while True:
                 t = time.monotonic()
@@ -176,11 +177,20 @@ async def main() -> None:
                 # Solar limit. Decided after the brain so the saturation
                 # check sees this tick's PIB permissions.
                 if curtailer is not None and cio is not None:
+                    # A frozen P1 would steer the limit on a stale number:
+                    # fail open, as if no gate were on, until it reads again.
+                    stale = p1_stale(io.p1.last_ok_t, t)
+                    if stale != prev_p1_stale:
+                        if stale:
+                            log.warning(f"P1 not read for >{P1_STALE_S}s — solar limit fails open to 100%")
+                        else:
+                            log.info("P1 readable again — solar curtailment resumes")
+                        prev_p1_stale = stale
                     cd = curtailer.decide(
                         p1=reading.p1,
                         solar_w=reading.solar,
-                        curtail=reading.curtail_export,
-                        import_pays=reading.import_pays,
+                        curtail=reading.curtail_export and not stale,
+                        import_pays=reading.import_pays and not stale,
                         saturated=brain.batteries_saturated(reading),
                         t=t,
                     )

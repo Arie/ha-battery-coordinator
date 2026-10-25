@@ -14,6 +14,16 @@ from curtailer import SolarCurtailer
 
 log = logging.getLogger("coordinator")
 
+# HWP1Meter returns its last grid power forever. Steering the limit on a
+# frozen export reading would ratchet the inverter down to 0 %, so past this
+# age the curtailer runs as if no gate were on and restores 100 %.
+P1_STALE_S = 15
+
+
+def p1_stale(last_ok_t: float | None, now: float) -> bool:
+    """P1 was never read, or its last good read is older than P1_STALE_S."""
+    return last_ok_t is None or now - last_ok_t > P1_STALE_S
+
 
 class CurtailIO:
     def __init__(

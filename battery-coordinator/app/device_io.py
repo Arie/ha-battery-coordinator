@@ -208,6 +208,13 @@ class HWP1Meter:
         self._last_pib_mode: str | None = None
         self._last_pib_permissions: list[str] | None = None
         self._last_pib_count: int | None = None
+        # Monotonic time of the last good /api/measurement read; None = never.
+        self._last_ok_t: float | None = None
+
+    @property
+    def last_ok_t(self) -> float | None:
+        """When grid power was last read successfully (time.monotonic)."""
+        return self._last_ok_t
 
     def _headers(self) -> dict[str, str]:
         # X-Api-Version pins the v2 contract. Without it the meter may answer
@@ -252,6 +259,7 @@ class HWP1Meter:
         measurement = await self._get_json(session, "/api/measurement")
         if measurement is not None:
             self._last_grid_power = measurement.get("power_w", 0)
+            self._last_ok_t = time.monotonic()
 
         batteries = await self._get_json(session, "/api/batteries")
         if batteries is not None:

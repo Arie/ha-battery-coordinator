@@ -9,6 +9,7 @@ into a hardware command.
 """
 
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -383,6 +384,40 @@ class TestHWP1ReadResilience:
         assert status.grid_power == 0.0
         assert status.pib_power == 0.0
         assert status.pib_count == 0
+
+
+class TestHWP1LastOkTime:
+    """The curtailer must know when P1 went quiet: the cached grid power
+    would otherwise steer it on a frozen number for as long as the outage."""
+
+    @pytest.mark.asyncio
+    async def test_success_sets_and_failure_keeps_last_ok_time(self):
+        meter = HWP1Meter("1.2.3.4", "tok")
+        assert meter.last_ok_t is None
+        session = _FakeMultiURLSession(
+            {
+                "/api/measurement": [
+                    {"status": 200, "payload": _GOOD_MEASUREMENT},
+                    {"raise_on_get": ConnectionError("blip")},
+                    {"status": 500, "payload": {}},
+                ],
+                "/api/batteries": [{"status": 200, "payload": _GOOD_BATTERIES}] * 3,
+            }
+        )
+        before = time.monotonic()
+        await meter.read(session)
+        ok_t = meter.last_ok_t
+        assert ok_t is not None and before <= ok_t <= time.monotonic()
+        await meter.read(session)
+        await meter.read(session)
+        assert meter.last_ok_t == ok_t
+
+    @pytest.mark.asyncio
+    async def test_first_read_failure_leaves_it_unset(self):
+        meter = HWP1Meter("1.2.3.4", "tok")
+        session = _FakeMultiURLSession({"/api/measurement": [{"raise_on_get": ConnectionError("dead")}]})
+        await meter.read(session)
+        assert meter.last_ok_t is None
 
 
 class TestOptionalHASensorStaleness:

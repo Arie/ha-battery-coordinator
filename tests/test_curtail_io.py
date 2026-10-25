@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
-from curtail_io import CurtailIO
+from curtail_io import P1_STALE_S, CurtailIO, p1_stale
 from curtailer import SolarCurtailer
 
 
@@ -114,3 +114,12 @@ async def test_successful_startup_restore_is_not_repeated_by_the_curtailer():
     await cio.restore_full("startup", 0.0)
     d = c.decide(p1=0.0, solar_w=0.0, curtail=False, import_pays=False, saturated=False, t=10.0)
     assert d.write is None
+
+
+def test_p1_stale_predicate():
+    """A frozen P1 must not steer the limit: never read or older than P1_STALE_S."""
+    assert P1_STALE_S == 15
+    assert p1_stale(None, 1000.0) is True
+    assert p1_stale(1000.0, 1000.0) is False
+    assert p1_stale(1000.0, 1000.0 + P1_STALE_S) is False
+    assert p1_stale(1000.0, 1000.0 + P1_STALE_S + 0.1) is True
