@@ -211,3 +211,11 @@ def test_unheld_import_fallback_steps_once_per_window():
     assert all(d.reason == "trim up" for _, d in w)
     assert all(b - a >= c.UNHELD_IMPORT_S for (a, _), (b, _) in pairwise(w))
     assert len(w) <= 600 // c.UNHELD_IMPORT_S
+
+
+def test_trim_up_percent_is_exact_at_a_boundary():
+    """(0 + 420) / 6000 * 100 is 7.000000000000001 in floats: ceil gave 8."""
+    c = SolarCurtailer()
+    _put(c, 5)
+    w = _run(c, 10, t0=1, curtail=True, p1=390, solar_w=0)
+    assert w and w[0][1] == CurtailDecision(7, "trim up")

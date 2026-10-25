@@ -174,7 +174,7 @@ class SolarCurtailer:
         if self._down_since is not None and t - self._down_since >= self.settle_down_s:
             if solar_w <= 0:
                 return NO_WRITE
-            pct = (solar_w - (self.target_w - p1)) / self.rated_w * 100
+            pct = (solar_w - (self.target_w - p1)) * 100 / self.rated_w
             new = min(self._snap_down(pct), current - self.step_pct)
             new = max(0, min(100, new))
             if new == self._limit:
@@ -184,7 +184,7 @@ class SolarCurtailer:
         if self._up_since is not None and t - self._up_since >= self.settle_up_s:
             if self._limit == 100:
                 return NO_WRITE
-            pct = (solar_w + (p1 - self.target_w)) / self.rated_w * 100
+            pct = (solar_w + (p1 - self.target_w)) * 100 / self.rated_w
             new = min(100, max(self._snap_up(pct), current + self.step_pct))
             if new == self._limit:
                 return NO_WRITE
