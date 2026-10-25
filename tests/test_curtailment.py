@@ -9,11 +9,13 @@ cross-charge lock: PIBs never hold charge_allowed while the Zendure exports.
 
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "battery-coordinator" / "app"))
 
 from brains.permission_fsm import PermissionFSM, State
-from coordinator_logic import Reading
+from coordinator_logic import Reading, pib_max_charge
+from curtailer import SolarCurtailer
 
 
 def _r(p1=0, zen_power=0, zen_soc=50, pibs=(0, 0), pib_socs=(50, 50), **extra):
@@ -188,3 +190,116 @@ class TestInhibitChargeBlocksImportPays:
         ds = _run(brain, _r(import_pays=True), ticks=5)
         ds += _run(brain, _r(import_pays=True, inhibit_charge=True), ticks=5, t0=5)
         assert _perms(ds) == [("to_full", ["charge_allowed"]), ("standby", None)]
+
+
+class _CurtailLoop:
+    """Close the P1 loop around the brain and the curtailer, 1 s per tick.
+
+    Inverter: solar = min(sun, limit% of 6000 W); a write takes effect the
+    tick after it is made. Two PIBs in HomeWizard zero mode move 1/20 of
+    the way per tick toward soaking the export, each capped by
+    pib_max_charge(soc), and only while the brain's last permissions are
+    zero mode with charge_allowed. SOC rises 1% per 27 Wh. The Zendure
+    follows the brain's target under a DAO setpoint of 0.
+    p1 = load - solar + pib_charge + zen (positive = import).
+    """
+
+    RATED_W = 6000.0
+
+    def __init__(self, *, load_w, pib_soc, sun_w):
+        self.brain = _brain()
+        self.curtailer = SolarCurtailer()
+        self.load_w = load_w
+        self.sun_w = sun_w
+        self.socs = [float(pib_soc), float(pib_soc)]
+        self.pibs = [0.0, 0.0]
+        self.zen = 0.0
+        self.mode: str | None = None
+        self.perms: list[str] = []
+        self.limit_pct = 100
+        self.t = 0
+        self.writes: list[tuple[int, int]] = []
+        self.samples: list[dict[str, Any]] = []
+
+    def tick(self):
+        solar = min(self.sun_w, self.limit_pct / 100 * self.RATED_W)
+        p1 = self.load_w - solar + sum(self.pibs) + self.zen
+        r = _r(
+            p1=p1,
+            zen_power=self.zen,
+            pibs=tuple(self.pibs),
+            pib_socs=tuple(self.socs),
+            setpoint=0,
+            curtail_export=True,
+        )
+        d = self.brain.decide(r, t=self.t)
+        if d.pib_mode is not None:
+            self.mode = d.pib_mode
+            self.perms = [] if d.pib_mode == "standby" else list(d.pib_permissions or [])
+        c = self.curtailer.decide(
+            p1=p1,
+            solar_w=solar,
+            curtail=True,
+            import_pays=False,
+            saturated=self.brain.batteries_saturated(r),
+            t=self.t,
+        )
+        self.samples.append({"t": self.t, "p1": p1, "solar": solar, "sun": self.sun_w, "socs": tuple(self.socs)})
+        if c.write is not None:
+            self.curtailer.mark_written(c.write, self.t)
+            self.writes.append((self.t, c.write))
+            self.limit_pct = c.write
+
+        self.zen += (d.target - self.zen) * 0.5
+        charging = self.mode == "zero" and "charge_allowed" in self.perms
+        share = (sum(self.pibs) - p1) / len(self.pibs)
+        for i, soc in enumerate(self.socs):
+            want = max(0.0, min(float(pib_max_charge(soc)), share)) if charging else 0.0
+            self.pibs[i] += (want - self.pibs[i]) / 20
+            self.socs[i] = min(100.0, soc + self.pibs[i] / 3600 / 27)
+        self.t += 1
+
+    def run(self, ticks):
+        start = len(self.samples)
+        for _ in range(ticks):
+            self.tick()
+        return self.samples[start:]
+
+
+class TestCurtailClosedLoop:
+    def test_soaks_before_throttling(self):
+        loop = _CurtailLoop(load_w=500, pib_soc=60, sun_w=4000)
+        samples = loop.run(5000)
+        before = [s for s in samples if min(s["socs"]) < 93]
+        assert before and len(before) < len(samples)  # taper reached within the run
+        assert sum(s["sun"] - s["solar"] for s in before) == 0
+        assert all(w == 100 for t, w in loop.writes if t <= before[-1]["t"])
+        throttles = [(t, w) for t, w in loop.writes if w < 100]
+        assert throttles, "never throttled after the PIBs tapered"
+        assert throttles[0][0] > before[-1]["t"]
+
+    def test_holds_p1_in_band_once_full(self):
+        loop = _CurtailLoop(load_w=500, pib_soc=100, sun_w=4000)
+        loop.run(120)
+        tail = loop.run(480)
+        in_band = [s for s in tail if -90 <= s["p1"] <= 30]
+        assert len(in_band) >= 0.9 * len(tail), min(s["p1"] for s in tail)
+
+    def test_bounded_writes_steady_sun(self):
+        loop = _CurtailLoop(load_w=500, pib_soc=100, sun_w=4000)
+        loop.run(600)
+        assert len([t for t, _ in loop.writes if t >= 120]) <= 20, loop.writes
+
+    def test_cloud_recovers(self):
+        # Saturated (97%, 240 W each) PIBs still soak, so the throttled
+        # panels (~1.7 kW) exceed the clouded sun. With load + soak below
+        # 1500 W the cloud would not bind and there would be nothing to
+        # recover from; with load above it no limit could avoid the import.
+        loop = _CurtailLoop(load_w=1200, pib_soc=97, sun_w=4000)
+        loop.run(240)
+        throttled = loop.limit_pct
+        assert throttled < 100 and throttled / 100 * loop.RATED_W > 1500
+        loop.sun_w = 1500
+        window = loop.run(60)
+        assert sum(s["p1"] for s in window) / len(window) < 300
+        assert loop.limit_pct > throttled
