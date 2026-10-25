@@ -88,6 +88,17 @@ async def main() -> None:
 
     async with aiohttp.ClientSession() as session:
         try:
+            # Restore the solar limit before anything that can stall: the
+            # SN fetch below can retry for minutes, and a crash mid-curtail
+            # must not leave the inverter throttled that long.
+            if curtailer is not None and not config.dry_run:
+                ok = await io.solar_limit.set_value(session, 100)
+                if ok:
+                    curtailer.mark_written(100, time.monotonic())
+                else:
+                    curtailer.mark_write_failed(time.monotonic())
+                log.info("SolarEdge limit ?→100% (startup)" + ("" if ok else " FAILED!"))
+
             # Read initial Zendure SN. Retry — the device may take 1–2 min
             # after a host reboot to populate it, and writes need the SN.
             zen_sn = await io.zendure.fetch_sn(session)
