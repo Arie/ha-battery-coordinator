@@ -200,3 +200,14 @@ def test_give_back_clamps_at_100():
     _put(c, 98)
     w = _run(c, 30, t0=1, curtail=True, p1=0.0, solar_w=5880, saturated=False)
     assert [d.write for _, d in w] == [100]
+
+
+def test_unheld_import_fallback_steps_once_per_window():
+    """Writes must not leave the fallback armed: one step per UNHELD_IMPORT_S."""
+    c = SolarCurtailer()
+    _put(c, 30)  # 1800 W cap, solar stuck at 1500 (< cap - margin)
+    w = _run(c, 600, t0=1, curtail=True, p1=40, solar_w=1500)
+    assert w
+    assert all(d.reason == "trim up" for _, d in w)
+    assert all(b - a >= c.UNHELD_IMPORT_S for (a, _), (b, _) in pairwise(w))
+    assert len(w) <= 600 // c.UNHELD_IMPORT_S

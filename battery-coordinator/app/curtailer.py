@@ -60,7 +60,8 @@ class SolarCurtailer:
         self._down_since: float | None = None
         self._up_since: float | None = None
         self._give_since: float | None = None
-        # Continuous import, regardless of held-back; writes do not reset it.
+        # Continuous import, regardless of held-back. Writes do not reset it,
+        # except a trim-up taken only on the unheld-import fallback.
         self._import_since: float | None = None
 
     @property
@@ -143,12 +144,13 @@ class SolarCurtailer:
             self._import_since = None
         elif self._import_since is None:
             self._import_since = t
-        held_back = (
+        at_cap = (
             self._limit is None
             or solar_w <= 0  # stale reading: fail open
             or solar_w >= self._limit / 100 * self.rated_w - self.HELD_BACK_MARGIN_W
-            or (self._import_since is not None and t - self._import_since >= self.UNHELD_IMPORT_S)
         )
+        unheld_import = self._import_since is not None and t - self._import_since >= self.UNHELD_IMPORT_S
+        held_back = at_cap or unheld_import
         want_up = importing and held_back
         want_give = held_back and not saturated and p1 >= self.target_w
         if want_down:
@@ -186,7 +188,12 @@ class SolarCurtailer:
             new = min(100, max(self._snap_up(pct), current + self.step_pct))
             if new == self._limit:
                 return NO_WRITE
-            return self._throttled(new, "trim up", t)
+            d = self._throttled(new, "trim up", t)
+            if d.write is not None and not at_cap:
+                # Fallback step only: one per UNHELD_IMPORT_S, not one per
+                # settle_up_s, or a long cloud walks the limit back to 100.
+                self._import_since = t
+            return d
 
         if self._give_since is not None and t - self._give_since >= self.settle_up_s:
             if self._limit == 100:

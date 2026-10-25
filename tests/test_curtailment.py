@@ -363,3 +363,23 @@ class TestCurtailClosedLoop:
         loop.limit_pct = 0
         window = loop.run(600)
         assert any(s["pib"] >= 0.9 * s["cap"] or s["limit"] == 100 for s in window), loop.writes
+
+    def test_long_cloud_steps_up_once_per_unheld_import_window(self):
+        # The 60 s unheld-import fallback must not turn into a trim-up every
+        # settle_up_s: ten minutes of cloud would walk the limit back to 100
+        # and dump the returning sun into the grid.
+        loop = _CurtailLoop(load_w=1200, pib_soc=97, sun_w=4000)
+        loop.run(240)
+        throttled = loop.limit_pct
+        assert throttled < 100
+        n0 = len(loop.writes)
+        loop.sun_w = 1500
+        loop.run(600)
+        assert len(loop.writes) - n0 <= 12, loop.writes[n0:]
+        assert loop.limit_pct <= throttled + 10
+        loop.sun_w = 4000
+        after = loop.run(60)
+        # The model PIBs park P1 a hair above 0 for the whole cloud, so the
+        # fallback does take its one 1 % step a minute: ~540 W of headroom
+        # queued, not the 3.5 kW of a limit walked back to 100.
+        assert min(s["p1"] for s in after) >= -800
