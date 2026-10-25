@@ -81,6 +81,7 @@ def test_deadband_is_quiet():
     _put(c, 50)
     w = _run(c, 300, t0=1, curtail=True, p1=-60.0, solar_w=3000)
     w += _run(c, 300, t0=301, curtail=True, p1=0.0, solar_w=3000)
+    assert w
     assert all(d.reason == "heartbeat" for _, d in w)
     assert all(d.write == 50 for _, d in w)
 
