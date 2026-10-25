@@ -102,7 +102,7 @@ the Zendure creates as surplus and charge off our own output.
 - **PIB permission failures retry next tick.** A failed `set_mode` PUT calls `brain.mark_pib_send_failed()`, which rewinds the heartbeat timer so the next tick re-emits — not after 5 min.
 - **Startup detection has a 2s holdoff.** A single noisy first reading can't lock the brain into a wrong state.
 - **p1_contradicts requires 3s sustained.** Brief P1 spikes during charge/discharge no longer accelerate step-down.
-- **Solar limit fails open: startup, gate off, stale gates and SIGTERM all restore 100%; only 0xF001 is written.**
+- **Solar limit fails open: startup, gate off, stale gates, stale P1 (> `P1_STALE_S` = 15s, via `HWP1Meter.last_ok_t`) and SIGTERM all restore 100%; only 0xF001 is written.**
 - **DISCHARGE stops rather than holding the pilot floor into an export.** `nom = zen_power - p1` equals `-(house load)` exactly — the `zen_power` term cancels the current setpoint — so it is safe to threshold on. When demand sits below `PILOT_W`, holding the -50W floor pushed the difference to the grid and parked P1 at ~-50W, inside the dead zone above the `DISCHARGE->CHARGE` guard (`p1 < -100W`). No transition could see it, so the brain stayed there indefinitely and bled the pack into the meter. `_discharge_held_off` latches the stop, with `EXPORT_HYST_W` (25W) of hysteresis so a load hovering at the boundary doesn't flip the target every tick. Pinned by `TestNeverFeedsBackToGrid`.
 
 ## Network
@@ -264,7 +264,14 @@ SOC ceiling, or `inhibit_charge` is on; and the PIBs are all ≥ 99 %, charging
 at ≥ 90 % of their combined cap, or not permitted to charge. Trim-up happens
 only while the inverter is held back (output within `HELD_BACK_MARGIN_W` =
 150W of the cap), solar reads 0, or the import has lasted `UNHELD_IMPORT_S`
-(60s). While a gate is on the limit is re-asserted every `HEARTBEAT_S` (300s).
+(60s); a step taken only on that fallback restarts its timer, so it is one
+step per `UNHELD_IMPORT_S`, not one per settle. Give-back: charge-only PIBs park
+P1 at ~0 by soaking, so a low limit never reads as import — while held back,
+not saturated and `p1 >= target_w` for `settle_up_s`, the limit rises
+`GIVE_BACK_STEP_PCT` (5). Failed writes back off from `min_write_s` doubling to
+`MAX_RETRY_S` (60s). In `main.py`, P1 older than `P1_STALE_S` (15s,
+`curtail_io.p1_stale`) runs the curtailer as if no gate were on, so a frozen
+reading cannot ratchet the limit to 0. While a gate is on the limit is re-asserted every `HEARTBEAT_S` (300s).
 In the brain, `inhibit_charge` blocks the import-pays PIB `to_full`, and
 without a setpoint the discharge states are blocked while either price gate is
 on.
