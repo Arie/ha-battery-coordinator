@@ -220,3 +220,31 @@ def test_trim_up_percent_is_exact_at_a_boundary():
     _put(c, 5)
     w = _run(c, 10, t0=1, curtail=True, p1=390, solar_w=0)
     assert w and w[0][1] == CurtailDecision(7, "trim up")
+
+
+def _fail_times(c, seconds):
+    times = []
+    for t in range(seconds):
+        d = c.decide(p1=0, solar_w=0, curtail=False, import_pays=False, saturated=False, t=float(t))
+        if d.write is not None:
+            c.mark_write_failed(float(t))
+            times.append(t)
+    return times
+
+
+def test_failed_writes_back_off_up_to_a_minute():
+    c = SolarCurtailer()
+    times = _fail_times(c, 400)
+    gaps = [b - a for a, b in pairwise(times)]
+    assert gaps[:6] == [3, 6, 12, 24, 48, 60]
+    assert all(g == 60 for g in gaps[5:])
+
+
+def test_successful_write_resets_the_backoff():
+    c = SolarCurtailer()
+    times = _fail_times(c, 50)  # 0, 3, 9, 21, 45
+    assert times == [0, 3, 9, 21, 45]
+    c.mark_written(100, 50.0)
+    c.mark_write_failed(51.0)
+    assert c.decide(p1=0, solar_w=0, curtail=False, import_pays=False, saturated=False, t=53.0).write is None
+    assert c.decide(p1=0, solar_w=0, curtail=False, import_pays=False, saturated=False, t=54.0).write == 100

@@ -28,6 +28,9 @@ class SolarCurtailer:
     # Fail open: an import that outlasts this trims up even when the panels
     # look short of the cap (solar_rated_w set too high, sensor off).
     UNHELD_IMPORT_S: ClassVar[int] = 60
+    # Consecutive failed writes double the retry interval from min_write_s
+    # up to this; a confirmed write resets it.
+    MAX_RETRY_S: ClassVar[int] = 60
     # Give-back: charge-only PIBs park P1 at ~0 by soaking the export, so a
     # limit that is too low while they have room never shows up as import.
     # While they are not saturated and P1 is at or above target, raise the
@@ -54,6 +57,7 @@ class SolarCurtailer:
         self.settle_up_s = settle_up_s
 
         self._limit: int | None = None
+        self._failures = 0
         self._ever_attempted = False
         self._last_attempt_t: float | None = None
         self._last_write_t: float | None = None
@@ -71,6 +75,7 @@ class SolarCurtailer:
 
     def mark_written(self, limit: int, t: float) -> None:
         self._limit = limit
+        self._failures = 0
         self._ever_attempted = True
         self._last_attempt_t = t
         self._last_write_t = t
@@ -78,6 +83,7 @@ class SolarCurtailer:
 
     def mark_write_failed(self, t: float) -> None:
         self._limit = None
+        self._failures += 1
         self._ever_attempted = True
         self._last_attempt_t = t
         self._last_write_t = None
@@ -119,8 +125,15 @@ class SolarCurtailer:
         self._give_since = None
 
     def _throttled(self, value: int, reason: str, t: float) -> CurtailDecision:
-        """Return a write unless one was attempted less than min_write_s ago."""
-        if self._last_attempt_t is not None and t - self._last_attempt_t < self.min_write_s:
+        """Return a write unless one was attempted too recently.
+
+        Too recently is min_write_s, doubled per consecutive failed write up
+        to MAX_RETRY_S.
+        """
+        interval = self.min_write_s
+        if self._failures > 1:
+            interval = max(interval, min(self.MAX_RETRY_S, self.min_write_s * 2 ** (self._failures - 1)))
+        if self._last_attempt_t is not None and t - self._last_attempt_t < interval:
             return NO_WRITE
         return CurtailDecision(value, reason)
 
