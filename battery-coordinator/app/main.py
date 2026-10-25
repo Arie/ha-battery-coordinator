@@ -21,6 +21,7 @@ from datetime import datetime
 import aiohttp
 from brains.permission_fsm import PermissionFSM, State
 from config import Config
+from curtail_io import CurtailIO
 from curtailer import SolarCurtailer
 from device_io import DeviceIO
 
@@ -72,32 +73,34 @@ async def main() -> None:
 
     HEARTBEAT_S = 60  # log a status line at INFO at least this often
 
-    # The Supervisor stops the add-on with SIGTERM. Turn it into a
-    # cancellation of this task so the finally below can restore the
-    # solar limit instead of the process dying mid-curtail. Only the first
-    # SIGTERM cancels: a repeat would cancel the restore itself.
-    main_task = asyncio.current_task()
-    if main_task is not None:
-        task = main_task
-
-        def _on_sigterm() -> None:
-            if not task.cancelling():
-                task.cancel()
-
-        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_sigterm)
-
     async with aiohttp.ClientSession() as session:
+        cio = (
+            CurtailIO(lambda v: io.solar_limit.set_value(session, v), curtailer, dry_run=config.dry_run)
+            if curtailer is not None
+            else None
+        )
         try:
+            # The Supervisor stops the add-on with SIGTERM. Turn it into a
+            # cancellation of this task so the finally below can restore
+            # the solar limit instead of the process dying mid-curtail.
+            # Registered inside the try, so no write can happen without
+            # the restore behind it. Only the first SIGTERM cancels: a
+            # repeat would cancel the restore itself.
+            main_task = asyncio.current_task()
+            if main_task is not None:
+                task = main_task
+
+                def _on_sigterm() -> None:
+                    if not task.cancelling():
+                        task.cancel()
+
+                asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_sigterm)
+
             # Restore the solar limit before anything that can stall: the
             # SN fetch below can retry for minutes, and a crash mid-curtail
             # must not leave the inverter throttled that long.
-            if curtailer is not None and not config.dry_run:
-                ok = await io.solar_limit.set_value(session, 100)
-                if ok:
-                    curtailer.mark_written(100, time.monotonic())
-                else:
-                    curtailer.mark_write_failed(time.monotonic())
-                log.info("SolarEdge limit ?→100% (startup)" + ("" if ok else " FAILED!"))
+            if cio is not None:
+                await cio.restore_full("startup", time.monotonic())
 
             # Read initial Zendure SN. Retry — the device may take 1–2 min
             # after a host reboot to populate it, and writes need the SN.
@@ -172,7 +175,7 @@ async def main() -> None:
 
                 # Solar limit. Decided after the brain so the saturation
                 # check sees this tick's PIB permissions.
-                if curtailer is not None:
+                if curtailer is not None and cio is not None:
                     cd = curtailer.decide(
                         p1=reading.p1,
                         solar_w=reading.solar,
@@ -182,14 +185,7 @@ async def main() -> None:
                         t=t,
                     )
                     if cd.write is not None and not config.dry_run:
-                        old = curtailer.limit
-                        ok = await io.solar_limit.set_value(session, cd.write)
-                        if ok:
-                            curtailer.mark_written(cd.write, t)
-                        else:
-                            curtailer.mark_write_failed(t)
-                        old_s = "?" if old is None else str(old)
-                        log.info(f"SolarEdge limit {old_s}→{cd.write}% ({cd.reason})" + ("" if ok else " FAILED!"))
+                        await cio.write(cd.write, cd.reason, t)
 
                 # Per-PIB breakdown: "+800/+240W (84/97%)"
                 if reading.pibs:
@@ -256,13 +252,11 @@ async def main() -> None:
                 await asyncio.sleep(1)
         finally:
             # Best-effort fail-open on shutdown: never leave the inverter
-            # throttled behind a stopped add-on. limit None (unknown, a
-            # failed write) restores too. set_value carries the writer's
+            # throttled behind a stopped add-on. An unknown limit or a write
+            # cut off mid-call restores too. set_value carries the writer's
             # own timeout, so a dead HA cannot hang the shutdown.
-            if curtailer is not None and curtailer.limit != 100 and not config.dry_run:
-                ok = await io.solar_limit.set_value(session, 100)
-                old_s = "?" if curtailer.limit is None else str(curtailer.limit)
-                log.info(f"SolarEdge limit {old_s}→100% (shutdown)" + ("" if ok else " FAILED!"))
+            if cio is not None:
+                await cio.restore_full("shutdown", time.monotonic())
 
 
 if __name__ == "__main__":

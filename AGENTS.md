@@ -139,6 +139,7 @@ battery-coordinator/
     device_io.py          Zendure local REST + HW P1 + OptionalHASensor
     coordinator_logic.py  Reading, Decision, PIB taper functions
     curtailer.py          SolarCurtailer: the inverter limit (pure, no I/O)
+    curtail_io.py         Limit writes with in-flight tracking; startup/shutdown restore
     brains/
       permission_fsm.py   The brain (transition table, decide(), step logic)
 
@@ -148,6 +149,7 @@ pyproject.toml            uv project: pytest, ruff, dev deps
 tests/
   test_brain_overrides.py Tunable kwargs propagate
   test_config.py          Config loader / validator
+  test_curtail_io.py      Restore on cancel mid-write, unknown limit, dry run
   test_curtailer.py       SolarCurtailer unit tests (gates, trim, throttle, heartbeat)
   test_curtailment.py     Closed loop: soak first, no sustained export, bounded writes
   test_device_io.py       Stale-read caching, SN retry, OptionalHA staleness + HTTP status
@@ -254,7 +256,9 @@ start a grid charge.
 | curtail_settle_up_s | 5s | Sustained import before trimming up |
 
 The curtailer (`curtailer.py`) is a separate pure controller; `main.py` feeds
-it `brain.batteries_saturated(reading)` and performs the writes. Saturation =
+it `brain.batteries_saturated(reading)` and performs the writes through
+`CurtailIO` (`curtail_io.py`), which also restores 100% at startup and on
+shutdown — including after a write cut off mid-call. Saturation =
 no battery can take more: the Zendure follows a setpoint, is maxed or at its
 SOC ceiling, or `inhibit_charge` is on; and the PIBs are all ≥ 99 %, charging
 at ≥ 90 % of their combined cap, or not permitted to charge. Trim-up happens
