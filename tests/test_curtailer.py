@@ -177,3 +177,26 @@ def test_startup_with_gate_on_does_not_assume_a_limit():
     assert c.limit is None
     d = c.decide(p1=0, solar_w=0, curtail=False, import_pays=True, saturated=False, t=0.0)
     assert d.write == 0 and d.reason == "import pays"
+
+
+def test_give_back_raises_a_low_limit_while_batteries_have_room():
+    """P1 parked at ~0 by soaking PIBs never reads as import: give back."""
+    c = SolarCurtailer()
+    _put(c, 9)  # 540 W cap, panels at it
+    w = _run(c, 20, t0=1, curtail=True, p1=0.0, solar_w=540, saturated=False)
+    assert w and w[0][0] == 1 + c.settle_up_s
+    assert w[0][1] == CurtailDecision(9 + c.GIVE_BACK_STEP_PCT, "give back")
+
+
+def test_no_give_back_when_saturated_or_exporting():
+    c = SolarCurtailer()
+    _put(c, 9)
+    assert _run(c, 60, t0=1, curtail=True, p1=0.0, solar_w=540, saturated=True) == []
+    assert _run(c, 15, t0=61, curtail=True, p1=-40.0, solar_w=540, saturated=False) == []
+
+
+def test_give_back_clamps_at_100():
+    c = SolarCurtailer()
+    _put(c, 98)
+    w = _run(c, 30, t0=1, curtail=True, p1=0.0, solar_w=5880, saturated=False)
+    assert [d.write for _, d in w] == [100]

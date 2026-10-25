@@ -352,3 +352,14 @@ class TestCurtailClosedLoop:
         loop.sun_w = 4000
         after = loop.run(60)
         assert min(s["p1"] for s in after) >= -300
+
+    def test_gives_back_a_low_limit_when_the_pibs_have_room(self):
+        # End of an import-pays window: the limit sits at 0 and the PIBs
+        # have room. Charge-only PIBs park P1 at ~0 by soaking whatever the
+        # panels make, so P1 never shows the import that trim-up waits for:
+        # the limit must be given back on its own.
+        loop = _CurtailLoop(load_w=500, pib_soc=60, sun_w=4000)
+        loop.curtailer.mark_written(0, -10)
+        loop.limit_pct = 0
+        window = loop.run(600)
+        assert any(s["pib"] >= 0.9 * s["cap"] or s["limit"] == 100 for s in window), loop.writes

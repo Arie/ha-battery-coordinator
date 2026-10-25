@@ -13,7 +13,7 @@ from typing import ClassVar
 @dataclass(frozen=True)
 class CurtailDecision:
     write: int | None  # limit % to write this tick, None = no write
-    reason: str  # startup | gate off | import pays | trim down | trim up | heartbeat | ""
+    reason: str  # startup | gate off | import pays | trim down | trim up | give back | heartbeat | ""
 
 
 NO_WRITE = CurtailDecision(None, "")
@@ -28,6 +28,11 @@ class SolarCurtailer:
     # Fail open: an import that outlasts this trims up even when the panels
     # look short of the cap (solar_rated_w set too high, sensor off).
     UNHELD_IMPORT_S: ClassVar[int] = 60
+    # Give-back: charge-only PIBs park P1 at ~0 by soaking the export, so a
+    # limit that is too low while they have room never shows up as import.
+    # While they are not saturated and P1 is at or above target, raise the
+    # limit this much per settle_up_s until they are (or it is 100).
+    GIVE_BACK_STEP_PCT: ClassVar[int] = 5
 
     def __init__(
         self,
@@ -54,6 +59,7 @@ class SolarCurtailer:
         self._last_write_t: float | None = None
         self._down_since: float | None = None
         self._up_since: float | None = None
+        self._give_since: float | None = None
         # Continuous import, regardless of held-back; writes do not reset it.
         self._import_since: float | None = None
 
@@ -109,6 +115,7 @@ class SolarCurtailer:
     def _reset_timers(self) -> None:
         self._down_since = None
         self._up_since = None
+        self._give_since = None
 
     def _throttled(self, value: int, reason: str, t: float) -> CurtailDecision:
         """Return a write unless one was attempted less than min_write_s ago."""
@@ -143,6 +150,7 @@ class SolarCurtailer:
             or (self._import_since is not None and t - self._import_since >= self.UNHELD_IMPORT_S)
         )
         want_up = importing and held_back
+        want_give = held_back and not saturated and p1 >= self.target_w
         if want_down:
             if self._down_since is None:
                 self._down_since = t
@@ -153,6 +161,11 @@ class SolarCurtailer:
                 self._up_since = t
         else:
             self._up_since = None
+        if want_give:
+            if self._give_since is None:
+                self._give_since = t
+        else:
+            self._give_since = None
 
         current = 100 if self._limit is None else self._limit
 
@@ -174,5 +187,10 @@ class SolarCurtailer:
             if new == self._limit:
                 return NO_WRITE
             return self._throttled(new, "trim up", t)
+
+        if self._give_since is not None and t - self._give_since >= self.settle_up_s:
+            if self._limit == 100:
+                return NO_WRITE
+            return self._throttled(min(100, current + self.GIVE_BACK_STEP_PCT), "give back", t)
 
         return NO_WRITE
