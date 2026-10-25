@@ -21,6 +21,10 @@ NO_WRITE = CurtailDecision(None, "")
 
 class SolarCurtailer:
     HEARTBEAT_S: ClassVar[int] = 300
+    # Trim up only while the panels produce within this of the limit's cap:
+    # below it the sun, not the limit, binds, and raising the limit would
+    # only queue up an export burst for when the sun returns.
+    HELD_BACK_MARGIN_W: ClassVar[int] = 150
 
     def __init__(
         self,
@@ -120,7 +124,8 @@ class SolarCurtailer:
 
     def _trim(self, *, p1: float, solar_w: float, saturated: bool, t: float) -> CurtailDecision:
         want_down = p1 < self.target_w - self.deadband_w and saturated
-        want_up = p1 > self.target_w + self.deadband_w
+        held_back = self._limit is None or solar_w >= self._limit / 100 * self.rated_w - self.HELD_BACK_MARGIN_W
+        want_up = p1 > self.target_w + self.deadband_w and held_back
         if want_down:
             if self._down_since is None:
                 self._down_since = t

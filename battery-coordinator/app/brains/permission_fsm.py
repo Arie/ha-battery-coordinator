@@ -599,14 +599,20 @@ class PermissionFSM:
         The curtailment controller throttles the panels only once this is
         True: an export the batteries could still absorb is free storage,
         not a cost. Under a setpoint the Zendure follows the optimiser and
-        cannot take more, so only the PIBs count.
+        cannot take more, so only the PIBs count. A PIB in taper still has
+        headroom (480 W at 95%), so the PIBs are full only when they are
+        (near) 100% or already charging at ~their combined cap.
         """
         zen_full = (
             self.state == State.SETPOINT
             or r.zen_soc >= self.zen_soc_max
             or r.zen_power >= self.max_charge * self.ZEN_MAXED_FRAC
         )
-        pibs_full = not r.pib_socs or _all_in_taper(r, self.PIB_TAPER_CAP)
+        pibs_full = (
+            not r.pib_socs
+            or all(s >= 99 for s in r.pib_socs)
+            or sum(max(0.0, p) for p in r.pibs) >= 0.9 * _total_charge_cap(r)
+        )
         return zen_full and pibs_full
 
     def _zendure_exports(self, r: Reading) -> bool:

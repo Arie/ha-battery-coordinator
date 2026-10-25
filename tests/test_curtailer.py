@@ -107,11 +107,15 @@ def test_solar_zero_never_trims_down():
 
 
 def test_cloud_while_throttled_trims_up():
+    """The sun, not the limit, binds under a cloud: raising the limit would
+    only queue up an export burst for when the sun returns."""
     c = SolarCurtailer()
-    _put(c, 40)
-    w = _run(c, 7, t0=1, curtail=True, p1=1200, solar_w=1000)
-    assert w and w[0][0] <= 6
-    assert w[0][1].write > 40
+    _put(c, 40)  # 2400 W cap
+    w = _run(c, 60, t0=1, curtail=True, p1=400, solar_w=1500)
+    assert w == []
+    w = _run(c, 10, t0=61, curtail=True, p1=400, solar_w=2380)
+    assert w and w[0][0] == 61 + c.settle_up_s
+    assert w[0][1].reason == "trim up" and w[0][1].write > 40
 
 
 def test_failed_write_retries_after_min_interval():

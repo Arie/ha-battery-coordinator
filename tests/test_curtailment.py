@@ -132,12 +132,21 @@ class TestNoSetpointDischargeGuard:
 
 
 class TestBatteriesSaturated:
-    def test_saturated_under_setpoint_needs_tapering_pibs(self):
+    def test_saturated_under_setpoint_when_pibs_soak_at_their_cap(self):
         brain = _brain()
         _run(brain, _r(setpoint=1500), ticks=5)
         assert brain.state == State.SETPOINT
+        assert brain.batteries_saturated(_r(setpoint=1500, pibs=(800, 800), pib_socs=(50, 50))) is True
+        assert brain.batteries_saturated(_r(setpoint=1500, pibs=(200, 200), pib_socs=(50, 50))) is False
         assert brain.batteries_saturated(_r(setpoint=1500, pib_socs=(50, 50))) is False
         assert brain.batteries_saturated(_r(setpoint=1500, pib_socs=(99, 99))) is True
+
+    def test_tapering_pibs_with_headroom_are_not_saturated(self):
+        """95% still takes 480 W each: idle PIBs there can soak more."""
+        brain = _brain()
+        _run(brain, _r(setpoint=0), ticks=5)
+        assert brain.batteries_saturated(_r(setpoint=0, pibs=(100, 100), pib_socs=(95, 95))) is False
+        assert brain.batteries_saturated(_r(setpoint=0, pibs=(480, 480), pib_socs=(95, 95))) is True
 
     def test_saturated_without_setpoint(self):
         brain = _brain()
@@ -244,7 +253,18 @@ class _CurtailLoop:
             saturated=self.brain.batteries_saturated(r),
             t=self.t,
         )
-        self.samples.append({"t": self.t, "p1": p1, "solar": solar, "sun": self.sun_w, "socs": tuple(self.socs)})
+        self.samples.append(
+            {
+                "t": self.t,
+                "p1": p1,
+                "solar": solar,
+                "sun": self.sun_w,
+                "socs": tuple(self.socs),
+                "pib": sum(self.pibs),
+                "cap": sum(pib_max_charge(soc) for soc in self.socs),
+                "limit": self.limit_pct,
+            }
+        )
         if c.write is not None:
             self.curtailer.mark_written(c.write, self.t)
             self.writes.append((self.t, c.write))
@@ -270,13 +290,16 @@ class TestCurtailClosedLoop:
     def test_soaks_before_throttling(self):
         loop = _CurtailLoop(load_w=500, pib_soc=60, sun_w=4000)
         samples = loop.run(5000)
-        before = [s for s in samples if min(s["socs"]) < 93]
-        assert before and len(before) < len(samples)  # taper reached within the run
-        assert sum(s["sun"] - s["solar"] for s in before) == 0
-        assert all(w == 100 for t, w in loop.writes if t <= before[-1]["t"])
-        throttles = [(t, w) for t, w in loop.writes if w < 100]
-        assert throttles, "never throttled after the PIBs tapered"
-        assert throttles[0][0] > before[-1]["t"]
+        # The first minute is the model PIBs' own 1/20-per-tick ramp-in.
+        assert all(t >= 60 for t, _ in loop.writes)
+        settled = samples[60:]
+        over = [s for s in settled if s["sun"] - loop.load_w > s["cap"]]
+        under = [s for s in settled if s["sun"] - loop.load_w <= s["cap"]]
+        assert over  # the surplus outran the PIBs, so throttling was in play
+        starved = [s for s in over if s["pib"] < 0.9 * s["cap"]]
+        assert not starved, starved[:3]
+        assert all(s["limit"] == 100 for s in under)
+        assert any(w < 100 for _, w in loop.writes), "never throttled the excess"
 
     def test_holds_p1_in_band_once_full(self):
         loop = _CurtailLoop(load_w=500, pib_soc=100, sun_w=4000)
@@ -292,9 +315,9 @@ class TestCurtailClosedLoop:
 
     def test_cloud_recovers(self):
         # Saturated (97%, 240 W each) PIBs still soak, so the throttled
-        # panels (~1.7 kW) exceed the clouded sun. With load + soak below
-        # 1500 W the cloud would not bind and there would be nothing to
-        # recover from; with load above it no limit could avoid the import.
+        # panels (~1.7 kW) exceed the clouded sun. The sun then binds, not
+        # the limit: raising the limit would only queue up an export burst
+        # for when the sun returns, so it must hold.
         loop = _CurtailLoop(load_w=1200, pib_soc=97, sun_w=4000)
         loop.run(240)
         throttled = loop.limit_pct
@@ -302,4 +325,8 @@ class TestCurtailClosedLoop:
         loop.sun_w = 1500
         window = loop.run(60)
         assert sum(s["p1"] for s in window) / len(window) < 300
-        assert loop.limit_pct > throttled
+        assert all(s["limit"] == throttled for s in window)
+        assert loop.limit_pct == throttled
+        loop.sun_w = 4000
+        after = loop.run(60)
+        assert min(s["p1"] for s in after) >= -300
